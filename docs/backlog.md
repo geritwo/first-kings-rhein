@@ -39,8 +39,9 @@ What the prototype (`hexcore.py`, `world.py`, `main.py`) already has, and where 
 
 - **F01 done** — axial pointy-top coordinates, terrain gen (plains, forest, hills, marsh, mountain,
   lake), cached map rendering, camera pan/drag/glide.
-- **F02 done** (2026-11-01) — 5–9 meandering rivers along hex edges (corner graph + Dijkstra), with islands, from
-  hills/mountains to a lake or a confluence; see `docs/specs/F02-edge-rivers.md`. No movement or
+- **F02 done** (2026-11-01) — 5–9 meandering rivers along hex edges (corner graph + Dijkstra), with
+  islands; 2 major rivers cross the central plains to the sea, the others are mostly tributaries.
+  Also added to terrain gen (F01): a sea coast on one of W / NW / N; see `docs/specs/F02-edge-rivers.md`. No movement or
   border effects yet (`World.is_river_edge` is the hook).
 - **F03 proto** — seasonal turn loop (481 spring, autumn harvest), top-bar HUD. Point types are the
   prototype's own: local renders (spoil 15%/season), silver, prestige (decays), authority (cap 20).

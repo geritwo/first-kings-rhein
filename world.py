@@ -23,7 +23,7 @@ import heapq
 import math
 import random
 
-from hexcore import (DIRECTIONS, axial_to_pixel, corner_neighbors, corner_pixel, find_path,
+from hexcore import (SQRT3, DIRECTIONS, axial_to_pixel, corner_neighbors, corner_pixel, find_path,
                      flood_fill, hex_corner_keys, hex_distance, neighbors,
                      offset_to_axial)
 
@@ -47,15 +47,32 @@ TERRAIN = {
     "marsh":    dict(name="Mocsár",  move=5, clear=10, turns=5),
     "mountain": dict(name="Hegység", move=None, clear=None, turns=None),
     "water":    dict(name="Tó",      move=None, clear=None, turns=None),
+    "sea":      dict(name="Tenger",  move=None, clear=None, turns=None),
 }
+WATER = ("water", "sea")        # lake + sea
+
+# Coast: one of these map sides always has sea along >= COAST_MIN_SHARE of its border
+COAST_SIDES = ("west", "northwest", "north")
+COAST_MIN_SHARE = 0.30
+COAST_DROP = 0.45               # elevation lowered at the coastline ...
+COAST_WIDTH = 3.0               # ... fading out over this many hexes (grown until the share is met)
+COAST_BAY_AMP = 3.0             # hexes; noise on the coastline (bays, headlands)
+REGION_TILT = 0.14              # land rises away from the coast (rivers drain to the sea)
+SEA_LEVEL = 0.26
 ROAD_MOVE = 1
 TERRITORY_COST_IMPASSABLE = 5   # mountains/lakes can be claimed, not entered
 TERRITORY_BUDGET = 4            # how far a province's claim reaches
 
 # Rivers (F02): run along hex edges from hills/mountains to a lake or another river
-RIVER_COUNT = (5, 9)            # random target count, inclusive
-RIVER_MIN_LEN = 6               # edges; shorter rivers are rejected
-RIVER_MAX_LEN = 60              # edges; no trekking across the whole map
+RIVER_COUNT = (5, 9)            # random target count incl. major rivers, inclusive
+RIVER_MAJOR_COUNT = 2           # Rhine/Loire-like: far highlands -> central plains -> sea
+RIVER_MAJOR_FAR = 0.55          # majors rise beyond this share of the distance from the coast
+RIVER_MAJOR_SPACING = 8         # min hex distance between major sources / between waypoints
+RIVER_MAJOR_MAX_LEN = 160       # edges
+RIVER_REPEL = 3.0               # extra step cost within a hex of an existing river (no parallel runs)
+RIVER_CENTRE = (0.3, 0.7)       # central box (share of width and height) majors must pass
+RIVER_MIN_LEN = 8               # edges; shorter rivers are rejected
+RIVER_MAX_LEN = 70              # edges, minor rivers
 RIVER_SOURCE_SPACING = 4        # min hex distance between river sources
 RIVER_UPHILL_PENALTY = 20       # step cost per unit of climbed elevation
 RIVER_FLAT = ("plains", "forest", "marsh")   # terrain where rivers meander
@@ -244,6 +261,7 @@ class World:
         self.au = 6
         self.log = []
         self.rivers = []          # list of corner lists, source -> mouth
+        self.n_major_rivers = 0   # rivers[:n] are the major ones
         self.river_branches = []  # side channels round an island hex
         self.river_edges = set()  # frozenset({hex_a, hex_b})
         self._generate_terrain()
@@ -273,31 +291,80 @@ class World:
         self.log = self.log[-60:]
 
     # ---- generation ---------------------------------------------------
+    def _coast_distance(self, x, y):
+        """Distance in hexes from the coast side (pixel coords at size 1)."""
+        if self.coast_side == "west":
+            return x / SQRT3
+        if self.coast_side == "north":
+            return y / SQRT3
+        return (x + y) / math.sqrt(2) / SQRT3        # northwest: from the corner
+
+    def _coast_border(self, col, row):
+        """Is this hex on the map border of the coast side?"""
+        if self.coast_side == "west":
+            return col == 0
+        if self.coast_side == "north":
+            return row == 0
+        return (col == 0 and row < self.height * 0.6) or (row == 0 and col < self.width * 0.6)
+
     def _generate_terrain(self):
         s = self.seed
-        self.elev = {}
+        self.coast_side = random.Random(s * 7919 + 1).choice(COAST_SIDES)
+        base, moist, dist, border = {}, {}, {}, []
         for row in range(self.height):
             for col in range(self.width):
                 h = offset_to_axial(col, row)
                 x, y = axial_to_pixel(*h, 1.0)
-                e = fbm(x * 0.09, y * 0.09, s)
+                base[h] = fbm(x * 0.09, y * 0.09, s)
                 m = fbm(x * 0.11 + 50, y * 0.11 + 50, s + 7)
                 # east = Germania (forest), west = Gaul (open, farmed)
-                m += (col / self.width - 0.5) * 0.35
-                if e > 0.72:
-                    t = "mountain"
-                elif e > 0.61:
-                    t = "hills"
-                elif e < 0.26:
-                    t = "water"
-                elif m > 0.72 and e < 0.42:
-                    t = "marsh"
-                elif m > 0.52:
-                    t = "forest"
-                else:
-                    t = "plains"
-                self.tiles[h] = Tile(t, col, row)
-                self.elev[h] = e     # kept separately (Tile uses __slots__)
+                moist[h] = m + (col / self.width - 0.5) * 0.35
+                bay = (fbm(x * 0.12 + 20, y * 0.12 + 20, s + 31) - 0.5) * 2 * COAST_BAY_AMP
+                dist[h] = (self._coast_distance(x, y), bay, col, row)
+                if self._coast_border(col, row):
+                    border.append(h)
+        dmax = max(d for d, _, _, _ in dist.values())
+
+        def elevations(width):
+            return {h: base[h] + REGION_TILT * (d / dmax - 0.5)
+                    - COAST_DROP * max(0.0, 1 - (d + bay) / width)
+                    for h, (d, bay, _, _) in dist.items()}
+
+        def sea_from(elev):
+            sea = {h for h in border if elev[h] < SEA_LEVEL}
+            stack = list(sea)
+            while stack:
+                for n in neighbors(stack.pop()):
+                    if n in elev and n not in sea and elev[n] < SEA_LEVEL:
+                        sea.add(n)
+                        stack.append(n)
+            return sea
+
+        width = COAST_WIDTH
+        while True:     # widen the coastal lowland until enough of the border is sea
+            self.elev = elevations(width)
+            sea = sea_from(self.elev)
+            if sum(h in sea for h in border) >= COAST_MIN_SHARE * len(border):
+                break
+            width += 0.5
+
+        for h, (_, _, col, row) in dist.items():
+            e, m = self.elev[h], moist[h]
+            if h in sea:
+                t = "sea"
+            elif e > 0.72:
+                t = "mountain"
+            elif e > 0.61:
+                t = "hills"
+            elif e < SEA_LEVEL:
+                t = "water"
+            elif m > 0.72 and e < 0.42:
+                t = "marsh"
+            elif m > 0.52:
+                t = "forest"
+            else:
+                t = "plains"
+            self.tiles[h] = Tile(t, col, row)
 
     def _generate_rivers(self):
         """Edge rivers: Dijkstra over the hex-corner graph, from a high corner
@@ -311,7 +378,7 @@ class World:
             return [h for h in c if h in self.tiles]
 
         def touches_water(c):
-            return any(self.tiles[h].terrain == "water" for h in on_map(c))
+            return any(self.tiles[h].terrain in WATER for h in on_map(c))
 
         elev_cache = {}
 
@@ -321,42 +388,69 @@ class World:
                 elev_cache[c] = sum(self.elev[h] for h in hs) / len(hs)
             return elev_cache[c]
 
-        def meander(c, field):
-            x, y = corner_pixel(c, 1.0)
-            f = RIVER_MEANDER_FREQ / math.sqrt(3)       # per hex, not per unit
-            return fbm(x * f, y * f, field, octaves=2)
+        meander_cache, nbr_cache = {}, {}
 
-        def step_cost(c1, edge, c2, field):
-            flat = all(self.tiles[h].terrain in RIVER_FLAT for h in edge if h in self.tiles)
+        def meander(c, field):
+            key = (c, field)
+            if key not in meander_cache:
+                x, y = corner_pixel(c, 1.0)
+                f = RIVER_MEANDER_FREQ / SQRT3          # per hex, not per unit
+                meander_cache[key] = max(0.0, fbm(x * f, y * f, field, octaves=2)
+                                         - RIVER_MEANDER_FLOOR)
+            return meander_cache[key]
+
+        def corner_nbrs(c):
+            if c not in nbr_cache:
+                nbr_cache[c] = [(e, n, all(h in self.tiles for h in e)
+                                 and all(self.tiles[h].terrain in RIVER_FLAT for h in e))
+                                for e, n in corner_neighbors(c)
+                                if all(h in self.tiles for h in e)]  # not along the border
+            return nbr_cache[c]
+
+        def step_cost(c1, flat, c2, field):
             amp = RIVER_MEANDER_FLAT if flat else RIVER_MEANDER_HILL
             return (RIVER_STEP_COST
                     + RIVER_UPHILL_PENALTY * max(0.0, elev(c2) - elev(c1))
-                    + amp * max(0.0, meander(c2, field) - RIVER_MEANDER_FLOOR))
+                    + amp * meander(c2, field))
+
+        def touches_sea(c):
+            return any(self.tiles[h].terrain == "sea" for h in on_map(c))
 
         river_corners = set()
 
-        def path_from(source, field):
+        def near_river(c):
+            """Within a hex of an existing river (corner touches a river hex)."""
+            return any(self.tiles[h].river for h in on_map(c))
+
+        def dijkstra(source, is_goal, blocked, field, repel=False):
+            """Cheapest corner path from source to the first goal corner."""
             dist, prev = {source: 0.0}, {source: None}
             heap, tie = [(0.0, 0, source)], 1
             while heap:
                 d, _, c = heapq.heappop(heap)
                 if d > dist[c]:
                     continue
-                if c != source and (c in river_corners or touches_water(c)):
+                if c != source and is_goal(c):
                     path = []
                     while c is not None:
                         path.append(c)
                         c = prev[c]
                     return path[::-1]
-                for edge, n in corner_neighbors(c):
-                    if not all(h in self.tiles for h in edge):
-                        continue        # no running along the map border
-                    nd = d + step_cost(c, edge, n, field)
+                for _, n, flat in corner_nbrs(c):
+                    if blocked(n) and not is_goal(n):
+                        continue
+                    nd = d + step_cost(c, flat, n, field)
+                    if repel and near_river(n):
+                        nd += RIVER_REPEL           # don't hug another river
                     if nd < dist.get(n, math.inf):
                         dist[n], prev[n] = nd, c
                         heapq.heappush(heap, (nd, tie, n))
                         tie += 1
             return None
+
+        def path_from(source, field):
+            return dijkstra(source, lambda c: c in river_corners or touches_water(c),
+                            lambda c: False, field, repel=True)
 
         def add_course(path):
             river_corners.update(path)
@@ -407,8 +501,72 @@ class World:
                         candidates[c] = min(candidates.get(c, 9), rank)
         order = sorted(candidates, key=lambda c: (candidates[c], -elev(c),
                                                   sorted(c)))
+        def finish(path):
+            self.rivers.append(path)
+            add_course(path)
+            if rng.random() < RIVER_ISLAND_CHANCE:
+                branch = island_branch(path)
+                if branch:
+                    self.river_branches.append(branch)
+                    add_course(branch)
+
         target = rng.randint(*RIVER_COUNT)
         sources = []
+
+        # major rivers: rise far from the coast, pass a central flat corner, reach the sea
+        def coast_dist(c):
+            return sum(self._coast_distance(*axial_to_pixel(*h, 1.0)) for h in c) / 3
+
+        dmax = max(coast_dist(c) for c in candidates)
+        far = [c for c in order if coast_dist(c) >= RIVER_MAJOR_FAR * dmax]
+        # fallback when the far side has few hills: its highest land corners
+        far += sorted({c for h in self.tiles for c in hex_corner_keys(h)
+                       if len(on_map(c)) == 3 and not touches_water(c)
+                       and c not in candidates
+                       and coast_dist(c) >= RIVER_MAJOR_FAR * dmax},
+                      key=lambda c: (-elev(c), sorted(c)))
+        lo, hi = RIVER_CENTRE
+        centre = sorted({c for h, t in self.tiles.items()
+                         if lo * self.width <= t.col <= hi * self.width
+                         and lo * self.height <= t.row <= hi * self.height
+                         for c in hex_corner_keys(h)
+                         if len(on_map(c)) == 3
+                         and all(self.tiles[x].terrain in RIVER_FLAT for x in c)},
+                        key=sorted)
+        waypoints = []
+        for src in far:
+            if len(self.rivers) >= RIVER_MAJOR_COUNT:
+                break
+            if src in river_corners:
+                continue
+            if any(hex_distance(a, b) < RIVER_MAJOR_SPACING
+                   for s in sources for a in src for b in s):
+                continue
+            field = self.seed + 1000 + 17 * len(sources)
+            options = {w for w in centre if w not in river_corners
+                       and all(hex_distance(a, b) >= RIVER_MAJOR_SPACING
+                               for p in waypoints for a in w for b in p)}
+            for _try in range(3):           # nearest reachable central corner first
+                leg1 = dijkstra(src, lambda c: c in options,
+                                lambda c: c in river_corners or touches_water(c), field,
+                                repel=True)
+                if leg1 is None:
+                    break
+                wp, used = leg1[-1], set(leg1)
+                leg2 = dijkstra(wp, touches_sea,
+                                lambda c: c in used or c in river_corners or touches_water(c),
+                                field, repel=True)
+                if leg2 is None:
+                    options.discard(wp)
+                    continue
+                path = leg1 + leg2[1:]
+                if len(path) - 1 <= RIVER_MAJOR_MAX_LEN:
+                    sources.append(src)
+                    waypoints.append(wp)
+                    finish(path)
+                break
+        self.n_major_rivers = len(self.rivers)
+
         for src in order:
             if len(self.rivers) >= target:
                 break
@@ -422,13 +580,7 @@ class World:
             if path is None or not (RIVER_MIN_LEN <= len(path) - 1 <= RIVER_MAX_LEN):
                 continue
             sources.append(src)
-            self.rivers.append(path)
-            add_course(path)
-            if rng.random() < RIVER_ISLAND_CHANCE:
-                branch = island_branch(path)
-                if branch:
-                    self.river_branches.append(branch)
-                    add_course(branch)
+            finish(path)
 
     def is_river_edge(self, a, b):
         """True if a river runs between neighbouring hexes a and b."""

@@ -9,6 +9,10 @@
 - `DECIDED` Civ-like terrain set, starting with **plains, hills, mountains**. Mountains appear in
   chains or standalone.
 - `LEANING` Forest and marsh as additional types (relevant for clearing, hunting, wilderness).
+- `DECIDED` **Coast:** every map has sea on one side, chosen at random from west, north-west and
+  north. At least 30% of that map border is sea. Sea ("Tenger") is its own terrain, separate from
+  lakes ("Tó").
+- `OPEN` What the sea does in play (ports, coastal trade, raids). For now it is impassable water.
 - Terrain/biome drives: local building materials, resource deposits, ruler action costs,
   hunt prey, movement.
 
@@ -24,6 +28,8 @@
 - `DECIDED` Rivers can split round a hex and rejoin, forming **islands**. (Rules for islands:
   `OPEN`.)
 - `DECIDED` Rivers do not run along the map border.
+- `DECIDED` At least **2 major rivers** (like the Rhine or Loire) rise far from the coast, cross the
+  central plains and flow into the sea. The other rivers are mostly their tributaries.
 - `LEANING` Settled hexes that border a river get +1 render (prototype value, not designed).
 - `PROPOSED` River crossing cost for movement and territory. (The original note also proposed
   weighting river courses toward province borders. Not possible yet: provinces are placed after

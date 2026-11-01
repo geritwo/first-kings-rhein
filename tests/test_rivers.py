@@ -7,7 +7,9 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from hexcore import hex_corner_keys, neighbors  # noqa: E402
-from world import RIVER_COUNT, World  # noqa: E402
+from hexcore import axial_to_offset  # noqa: E402
+from world import (COAST_MIN_SHARE, COAST_SIDES, RIVER_CENTRE, RIVER_COUNT,  # noqa: E402
+                   RIVER_FLAT, RIVER_MAJOR_COUNT, World)
 
 SEEDS = range(50)
 
@@ -21,7 +23,7 @@ class EdgeRiverTest(unittest.TestCase):
         for w in self.worlds:
             self.assertLessEqual(len(w.rivers), RIVER_COUNT[1], w.seed)
             terrains = {t.terrain for t in w.tiles.values()}
-            if "water" in terrains and terrains & {"hills", "mountain"}:
+            if terrains & {"water", "sea"} and terrains & {"hills", "mountain"}:
                 self.assertGreaterEqual(len(w.rivers), 1, w.seed)
 
     def test_paths_are_connected_edges_without_loops(self):
@@ -38,10 +40,13 @@ class EdgeRiverTest(unittest.TestCase):
             earlier = set()
             for river in w.rivers:
                 def water(c):
-                    return any(h in w.tiles and w.tiles[h].terrain == "water" for h in c)
+                    return any(h in w.tiles and w.tiles[h].terrain in ("water", "sea")
+                               for h in c)
                 src = river[0]
-                self.assertTrue(any(h in w.tiles and w.tiles[h].terrain in ("hills", "mountain")
-                                    for h in src), w.seed)
+                if not any(river is m for m in w.rivers[:w.n_major_rivers]):
+                    # majors may fall back to high lowland corners
+                    self.assertTrue(any(h in w.tiles and w.tiles[h].terrain
+                                        in ("hills", "mountain") for h in src), w.seed)
                 self.assertTrue(water(river[-1]) or river[-1] in earlier, w.seed)
                 for c in river[:-1]:
                     self.assertFalse(water(c), w.seed)
@@ -50,6 +55,31 @@ class EdgeRiverTest(unittest.TestCase):
                 for b in w.river_branches:      # its island channels count too
                     if b[0] in river:
                         earlier.update(b)
+
+    def test_coast(self):
+        """One of W / NW / N always has sea on >= 30% of its map border."""
+        for w in self.worlds:
+            self.assertIn(w.coast_side, COAST_SIDES)
+            border = [h for h, t in w.tiles.items() if w._coast_border(t.col, t.row)]
+            sea = sum(w.tiles[h].terrain == "sea" for h in border)
+            self.assertGreaterEqual(sea, COAST_MIN_SHARE * len(border), w.seed)
+
+    def test_major_rivers(self):
+        """At least 2 major rivers cross the central plains and reach the sea."""
+        lo, hi = RIVER_CENTRE
+        for w in self.worlds:
+            self.assertGreaterEqual(w.n_major_rivers, RIVER_MAJOR_COUNT, w.seed)
+            for river in w.rivers[:w.n_major_rivers]:
+                self.assertTrue(any(w.tiles[h].terrain == "sea" for h in river[-1]
+                                    if h in w.tiles), w.seed)
+
+                def central_flat(c):
+                    offs = [axial_to_offset(*h) for h in c]
+                    return (all(h in w.tiles and w.tiles[h].terrain in RIVER_FLAT for h in c)
+                            and any(lo * w.width <= col <= hi * w.width
+                                    and lo * w.height <= row <= hi * w.height
+                                    for col, row in offs))
+                self.assertTrue(any(central_flat(c) for c in river), w.seed)
 
     def test_islands(self):
         """A branch leaves and rejoins its river round one hex: an island."""

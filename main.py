@@ -61,6 +61,7 @@ TERRAIN_COL = {
     "marsh": (94, 116, 104),
     "mountain": (122, 118, 114),
     "water": (62, 98, 140),
+    "sea": (40, 70, 112),
 }
 WHEAT = (204, 184, 106)
 ROAD_COL = (120, 92, 62)
@@ -443,12 +444,14 @@ class Game:
 
         # rivers and roads
         ox, oy = self.origin
+        majors = w.rivers[:w.n_major_rivers]
         for river in w.rivers + w.river_branches:   # along hex edges, corner to corner
+            width = 6 if any(river is m for m in majors) else 4
             pts = [(x + ox, y + oy) for x, y in
                    (corner_pixel(c, HEX_SIZE) for c in river)]
-            pygame.draw.lines(surf, RIVER_COL, False, pts, 4)
+            pygame.draw.lines(surf, RIVER_COL, False, pts, width)
             for p in pts:                       # round the joints
-                pygame.draw.circle(surf, RIVER_COL, p, 2)
+                pygame.draw.circle(surf, RIVER_COL, p, width // 2)
         for h, t in w.tiles.items():
             if not t.road:
                 continue
