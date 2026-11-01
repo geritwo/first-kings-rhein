@@ -1,0 +1,35 @@
+# Open questions
+
+Move an item to `decisions.md` once answered, and update the design file.
+
+## Core / scope
+- [ ] Turn length / time scale (affects service duration, growth rates, event frequency)
+- [ ] Exact province size (> 7 hexes) and composition at start
+- [ ] MVP resources: 8-product list or full ~16?
+
+## Provinces & land
+- [ ] Default legal status of the wilderness ring: ownerless / royal forest / ecclesiastical
+- [ ] Wasteland between provinces: slow wild terrain (forest/marsh) or plain ungoverned land?
+- [ ] Distant estate chain: clearing + steward — steps, costs, output
+- [ ] Do inherited knights reset to base loyalty?
+- [ ] Can a knight have two lords? (lean: no for MVP)
+
+## Nobility & diplomacy
+- [ ] Full representation of nobility beyond the production modifier
+- [ ] How many noble traits in MVP (4 or fewer)?
+- [ ] Tie vassal service duration to turn length?
+- [ ] Transition conditions/costs for each ladder step
+
+## Ruler
+- [ ] Remaining ruler actions beyond court / feast / hunt
+- [ ] Ruler death before succession exists: incapacitation or placeholder new ruler?
+
+## World
+- [ ] Rivals: full ladder or only conquest/submission?
+- [ ] Do rivals conquer each other?
+- [ ] Barbarian pressure: constant or fading around 1000 CE?
+
+## Church
+- [ ] Concrete church tech tree nodes and costs
+- [ ] Church satisfaction thresholds and demand events
+- [ ] Reform event (Eigenkirche → patronage): decision tree and timing
