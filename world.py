@@ -1,0 +1,853 @@
+"""
+World / rules layer — provinces, settlement, buildings, seasons, resources.
+
+No pygame in here: everything is plain Python so the rules can be tested and
+simulated headless (see simulate.py).  The UI in main.py only reads this
+state and calls the action methods.
+
+Design summary (see the design notes in the project):
+  * 1 turn = 1 season, 4 per year, starting 481 spring
+  * province = the main unit; hexes inside it are wild / field / village /
+    town quarter; the province grows by clearing adjacent wild hexes
+  * one project slot per province (clearing OR a building step)
+  * buildings are lines with upgrade tiers (earthwork -> palisade -> keep ...)
+  * local resource: renders (stored per province, spoils, cannot travel)
+  * global resources: silver, prestige (decays), authority/AU (capped)
+  * loyalty: 4 discrete states; drifts down when the ruler stays away
+  * the ruler is a unit on the map; where he stands, things happen
+  * royal domain = direct orders; vassals act on their own traits unless
+    you pay AU (or the ruler is present); independent tribes are AI
+"""
+
+import math
+import random
+
+from hexcore import (DIRECTIONS, axial_to_pixel, find_path, flood_fill,
+                     hex_distance, neighbors, offset_to_axial)
+
+# ----------------------------------------------------------------------
+# Time
+# ----------------------------------------------------------------------
+START_YEAR = 481
+SEASONS = ["Tavasz", "Nyár", "Ősz", "Tél"]
+SEASON_YIELD = [1.0, 1.0, 3.0, 0.0]     # autumn = harvest, winter = nothing
+SEASON_WORK = [1.0, 1.0, 1.0, 0.5]      # building work per turn
+SPOILAGE = 0.15                          # share of stored renders lost per season
+
+# ----------------------------------------------------------------------
+# Terrain: name, move cost (half-MP units: plains = 2), clear cost, clear turns
+# move None = impassable, clear None = cannot be settled
+# ----------------------------------------------------------------------
+TERRAIN = {
+    "plains":   dict(name="Síkság",  move=2, clear=4,  turns=2),
+    "forest":   dict(name="Erdő",    move=3, clear=8,  turns=4),
+    "hills":    dict(name="Dombság", move=3, clear=6,  turns=3),
+    "marsh":    dict(name="Mocsár",  move=5, clear=10, turns=5),
+    "mountain": dict(name="Hegység", move=None, clear=None, turns=None),
+    "water":    dict(name="Tó",      move=None, clear=None, turns=None),
+}
+ROAD_MOVE = 1
+TERRITORY_COST_IMPASSABLE = 5   # mountains/lakes can be claimed, not entered
+TERRITORY_BUDGET = 4            # how far a province's claim reaches
+
+# Settlement level of a hex
+WILD, FIELD, VILLAGE, TOWN = 0, 1, 2, 3
+POP_NAMES = ["Vadon", "Szántó", "Falu", "Városnegyed"]
+POP_RENDERS = [0, 1, 2, 2]
+POP_SILVER = [0, 0, 0, 1]
+
+# ----------------------------------------------------------------------
+# Buildings: each line has tiers; one hex holds one line
+# ----------------------------------------------------------------------
+BUILDINGS = {
+    "fort": dict(name="Vár", tiers=["Földvár", "Palánkvár", "Lakótorony", "Kővár"],
+                 cost=[10, 25, 50, 90], turns=[2, 3, 5, 8],
+                 min_pop=FIELD, unique=False, min_religion=0, royal_only=False),
+    "church": dict(name="Egyház", tiers=["Fakápolna", "Templom", "Bazilika", "Katedrális"],
+                   cost=[8, 25, 60, 120], turns=[2, 4, 8, 14],
+                   min_pop=VILLAGE, unique=True, min_religion=0, royal_only=False),
+    "monastery": dict(name="Kolostor", tiers=["Remeteség", "Kolostor", "Apátság"],
+                      cost=[10, 30, 70], turns=[3, 5, 9],
+                      min_pop=FIELD, unique=False, min_religion=1, royal_only=False),
+    "market": dict(name="Piac", tiers=["Lerakat", "Piac", "Vásárhely"],
+                   cost=[10, 30, 70], turns=[2, 4, 7],
+                   min_pop=VILLAGE, unique=True, min_religion=0, royal_only=False),
+    "pfalz": dict(name="Palota", tiers=["Királyi udvarház", "Palota"],
+                  cost=[20, 60], turns=[3, 6],
+                  min_pop=VILLAGE, unique=True, min_religion=0, royal_only=True),
+}
+TOWN_COST, TOWN_TURNS = 20, 4      # village -> town quarter
+LINE_LIMIT = {"fort": lambda n: 1 + n // 4,      # n = settled hexes
+              "monastery": lambda n: 1 + n // 8}
+GROWTH_STORE, GROWTH_COST = 12, 6  # autumn: field -> village
+
+RELIGION = ["Pogány", "Vegyes", "Keresztény"]
+LOYALTY = ["Lázongó", "Bizalmatlan", "Hűséges", "Odaadó"]
+LOYALTY_MULT = [0.5, 0.8, 1.0, 1.1]
+ABSENCE_LIMIT = 8            # seasons without a royal visit -> loyalty -1
+ABSENCE_LIMIT_PFALZ = 14
+VASSAL_ORDER_AU = 3
+AU_BASE, AU_CAP = 2, 20
+FEAST_COST, FEAST_PRESTIGE = 10, 2
+RULER_MP = 12                # half-MP units: 6 plains hexes, 12 on a road
+
+TRAITS = ["Jámbor", "Becsvágyó", "Szorgos", "Harcias", "Rest", "Cselszövő"]
+
+FACTIONS = {
+    "player":  dict(name="Száli frankok", culture="frank", religion=0,
+                    color=(196, 64, 52)),
+    "frank":   dict(name="Frank kiskirály", culture="frank", religion=0,
+                    color=(214, 150, 60)),
+    "roman":   dict(name="Gallo-rómaiak", culture="roman", religion=2,
+                    color=(150, 92, 168)),
+    "alemann": dict(name="Alemannok", culture="alemann", religion=0,
+                    color=(70, 120, 180)),
+}
+
+NAMES = {
+    "frank": ["Tournai", "Cambrai", "Tongeren", "Köln", "Thérouanne", "Nijmegen",
+              "Utrecht", "Maastricht", "Jülich", "Bonn", "Xanten", "Andernach"],
+    "roman": ["Soissons", "Reims", "Laon", "Noyon", "Beauvais", "Amiens",
+              "Senlis", "Châlons", "Troyes", "Párizs", "Meaux", "Arras"],
+    "alemann": ["Breisgau", "Ortenau", "Thurgau", "Hegau", "Linzgau",
+                "Klettgau", "Alpgau", "Baar", "Nagoldgau", "Zürichgau"],
+}
+LORDS = {
+    "frank": ["Ragnachar", "Chararic", "Sigibert", "Rignomer", "Childebert",
+              "Theudebald", "Ansoald", "Gundoald", "Chlodomer", "Audomar",
+              "Baderic", "Sunno"],
+    "roman": ["Syagrius", "Aurelianus", "Lupus", "Avitus", "Agrippinus",
+              "Paulinus", "Ferreolus", "Ennodius", "Principius", "Volusianus",
+              "Arbogastes", "Tonantius"],
+    "alemann": ["Gibuld", "Hortar", "Vadomar", "Chnodomar", "Macrian",
+                "Fraomar", "Gundomad", "Priarius", "Suomar", "Urius"],
+}
+
+
+# ----------------------------------------------------------------------
+# Noise (value noise + fBm), pure Python
+# ----------------------------------------------------------------------
+def _hash01(ix, iy, seed):
+    h = (ix * 374761393 + iy * 668265263 + seed * 2147483647) & 0xFFFFFFFF
+    h = ((h ^ (h >> 13)) * 1274126177) & 0xFFFFFFFF
+    return ((h ^ (h >> 16)) & 0xFFFFFF) / float(0x1000000)
+
+
+def _value_noise(x, y, seed):
+    ix, iy = math.floor(x), math.floor(y)
+    fx, fy = x - ix, y - iy
+    sx, sy = fx * fx * (3 - 2 * fx), fy * fy * (3 - 2 * fy)
+    a = _hash01(ix, iy, seed)
+    b = _hash01(ix + 1, iy, seed)
+    c = _hash01(ix, iy + 1, seed)
+    d = _hash01(ix + 1, iy + 1, seed)
+    top = a + (b - a) * sx
+    bot = c + (d - c) * sx
+    return top + (bot - top) * sy
+
+
+def fbm(x, y, seed, octaves=4):
+    total, amp, freq, norm = 0.0, 1.0, 1.0, 0.0
+    for o in range(octaves):
+        total += amp * _value_noise(x * freq, y * freq, seed + o * 101)
+        norm += amp
+        amp *= 0.5
+        freq *= 2.0
+    return total / norm
+
+
+# ----------------------------------------------------------------------
+# Data classes
+# ----------------------------------------------------------------------
+class Tile:
+    __slots__ = ("terrain", "pop", "province", "owner", "imp", "road",
+                 "river_to", "col", "row")
+
+    def __init__(self, terrain, col, row):
+        self.terrain = terrain
+        self.pop = WILD
+        self.province = None   # who settled it (settled hexes only)
+        self.owner = None      # territory owner (claim), incl. settled
+        self.imp = None        # [line_key, tier_index] or None
+        self.road = False
+        self.river_to = None   # next hex downstream (for drawing / fertility)
+        self.col, self.row = col, row
+
+    @property
+    def river(self):
+        return self.river_to is not None
+
+
+class Lord:
+    def __init__(self, name, trait):
+        self.name = name
+        self.trait = trait
+
+
+class Province:
+    def __init__(self, pid, name, faction, seat, lord):
+        self.id = pid
+        self.name = name
+        self.faction = faction        # key into FACTIONS
+        self.status = "independent"   # 'royal' | 'vassal' | 'independent'
+        self.seat = seat
+        self.lord = lord
+        self.store = 10.0             # renders, local
+        self.loyalty = 2              # index into LOYALTY (player provinces)
+        self.religion = FACTIONS[faction]["religion"]
+        self.project = None           # dict, see World.start_*
+        self.acted = False            # gave an order this turn
+        self.last_visit = 0
+        self.visit_streak = 0
+        self.territory = set()
+        self.settled = set()
+        self.color = FACTIONS[faction]["color"]
+
+    @property
+    def is_player(self):
+        return self.status in ("royal", "vassal")
+
+
+class Ruler:
+    def __init__(self, name, hex_pos, born):
+        self.name = name
+        self.hex = hex_pos
+        self.born = born
+        self.mp = RULER_MP
+
+
+# ----------------------------------------------------------------------
+# World
+# ----------------------------------------------------------------------
+class World:
+    def __init__(self, width=40, height=28, seed=None, n_provinces=22):
+        self.seed = seed if seed is not None else random.randrange(1 << 30)
+        self.rng = random.Random(self.seed)
+        self.width, self.height = width, height
+        self.tiles = {}
+        self.provinces = []
+        self.turn = 0
+        self.silver = 5
+        self.prestige = 10
+        self.au = 6
+        self.log = []
+        self._generate_terrain()
+        self._generate_river()
+        self._place_provinces(n_provinces)
+        self._build_roman_roads()
+        self.recompute_territory()
+        self.ruler = Ruler("Klodvig", self.capital.seat, born=466)
+        self.add_log(f"{self.ruler.name}, a száli frankok királya, "
+                     f"{self.capital.name} székhelyén trónra lép.")
+
+    # ---- time helpers -------------------------------------------------
+    @property
+    def season(self):
+        return self.turn % 4
+
+    @property
+    def year(self):
+        return START_YEAR + self.turn // 4
+
+    def date_str(self, turn=None):
+        t = self.turn if turn is None else turn
+        return f"{START_YEAR + t // 4} {SEASONS[t % 4].lower()}"
+
+    def add_log(self, text):
+        self.log.append(f"{self.date_str()}: {text}")
+        self.log = self.log[-60:]
+
+    # ---- generation ---------------------------------------------------
+    def _generate_terrain(self):
+        s = self.seed
+        self.elev = {}
+        for row in range(self.height):
+            for col in range(self.width):
+                h = offset_to_axial(col, row)
+                x, y = axial_to_pixel(*h, 1.0)
+                e = fbm(x * 0.09, y * 0.09, s)
+                m = fbm(x * 0.11 + 50, y * 0.11 + 50, s + 7)
+                # east = Germania (forest), west = Gaul (open, farmed)
+                m += (col / self.width - 0.5) * 0.35
+                if e > 0.72:
+                    t = "mountain"
+                elif e > 0.61:
+                    t = "hills"
+                elif e < 0.26:
+                    t = "water"
+                elif m > 0.72 and e < 0.42:
+                    t = "marsh"
+                elif m > 0.52:
+                    t = "forest"
+                else:
+                    t = "plains"
+                self.tiles[h] = Tile(t, col, row)
+                self.elev[h] = e     # kept separately (Tile uses __slots__)
+
+    def _generate_river(self):
+        """One river: from a high hex, walk downhill to water or the map edge."""
+        land = [h for h, t in self.tiles.items() if t.terrain in ("hills", "mountain")]
+        if not land:
+            return
+        for _ in range(2):  # two rivers
+            start = self.rng.choice(land)
+            current, seen = start, {start}
+            for _step in range(80):
+                options = [n for n in neighbors(current) if n not in seen]
+                if not options:
+                    break
+                off_map = [n for n in options if n not in self.tiles]
+                if off_map:
+                    self.tiles[current].river_to = off_map[0]
+                    break
+                nxt = min(options, key=lambda n: self.elev[n]
+                          + self.rng.random() * 0.03)
+                self.tiles[current].river_to = nxt
+                if self.tiles[nxt].terrain == "water":
+                    break
+                seen.add(nxt)
+                current = nxt
+        # rivers carve valleys: mountains on the course become hills
+        for t in self.tiles.values():
+            if t.river and t.terrain == "mountain":
+                t.terrain = "hills"
+
+    def _region(self, col, row):
+        if col < self.width * 0.40 and row > self.height * 0.30:
+            return "roman"
+        if col > self.width * 0.60 and row > self.height * 0.50:
+            return "alemann"
+        return "frank"
+
+    def _place_provinces(self, n):
+        candidates = [h for h, t in self.tiles.items()
+                      if t.terrain in ("plains", "hills")
+                      and 1 <= t.col < self.width - 1 and 1 <= t.row < self.height - 1]
+        self.rng.shuffle(candidates)
+        seats = []
+        for h in candidates:
+            if all(hex_distance(h, s) >= 6 for s in seats):
+                seats.append(h)
+            if len(seats) >= n:
+                break
+
+        names = {k: v[:] for k, v in NAMES.items()}
+        lords = {k: v[:] for k, v in LORDS.items()}
+        for lst in list(names.values()) + list(lords.values()):
+            self.rng.shuffle(lst)
+
+        for i, seat in enumerate(seats):
+            t = self.tiles[seat]
+            fac = self._region(t.col, t.row)
+            name = names[fac].pop() if names[fac] else f"{fac}-{i}"
+            lord = Lord(lords[fac].pop() if lords[fac] else "Ismeretlen",
+                        self.rng.choice(TRAITS))
+            p = Province(i, name, fac, seat, lord)
+            self.provinces.append(p)
+
+        # the player: frank seat nearest the north-centre, plus its 2 nearest
+        # frank neighbours as royal domain and the next one as a vassal
+        target = offset_to_axial(int(self.width * 0.5), int(self.height * 0.30))
+        franks = [p for p in self.provinces if p.faction == "frank"]
+        home = min(franks, key=lambda p: hex_distance(p.seat, target))
+        others = sorted((p for p in franks if p is not home),
+                        key=lambda p: hex_distance(p.seat, home.seat))
+        for p in [home] + others[:2]:
+            p.faction, p.status = "player", "royal"
+            p.color = FACTIONS["player"]["color"]
+        if len(others) > 2:
+            v = others[2]
+            v.faction, v.status = "player", "vassal"
+            v.color = FACTIONS["player"]["color"]
+        home.lord = Lord("Klodvig", "Becsvágyó")
+        self.capital = home
+
+        # vary colours a little per province so neighbours stand apart
+        for p in self.provinces:
+            if not p.is_player:
+                j = self.rng.randint(-22, 22)
+                p.color = tuple(max(0, min(255, c + j)) for c in p.color)
+
+        # starting settlement
+        for p in self.provinces:
+            roman = p.faction == "roman"
+            seat_tile = self.tiles[p.seat]
+            self._settle(p.seat, p, TOWN if roman else VILLAGE)
+            seat_tile.imp = ["fort", 0]
+            ring = [n for n in neighbors(p.seat)
+                    if n in self.tiles and self._clearable(n)
+                    and self.tiles[n].province is None]
+            self.rng.shuffle(ring)
+            for k, n in enumerate(ring[: (4 if roman else 3)]):
+                self._settle(n, p, VILLAGE if (roman and k == 0) else FIELD)
+            if roman:
+                p.store = 18.0
+                spots = [h for h in ring[:4] if self.tiles[h].pop >= VILLAGE]
+                if spots:
+                    self.tiles[spots[0]].imp = ["church", 1]
+                else:
+                    seat_tile.imp = ["church", 1]
+            if p.is_player:
+                p.store = 20.0
+            p.last_visit = 0
+
+    def _settle(self, h, p, level):
+        t = self.tiles[h]
+        t.pop = level
+        t.province = p
+        t.owner = p
+        p.settled.add(h)
+        p.territory.add(h)
+
+    def _build_roman_roads(self):
+        romans = [p for p in self.provinces if p.faction == "roman"]
+
+        def cost(a, b):
+            if b not in self.tiles:
+                return None
+            return TERRAIN[self.tiles[b].terrain]["move"]
+
+        done = set()
+        for p in romans:
+            others = sorted((q for q in self.provinces if q is not p),
+                            key=lambda q: hex_distance(p.seat, q.seat))
+            # link to the nearest roman city and to one non-roman neighbour
+            targets = [q for q in others if q.faction == "roman"][:1]
+            targets += [q for q in others if q.faction != "roman"][:1]
+            for q in targets:
+                key = frozenset((p.id, q.id))
+                if key in done:
+                    continue
+                done.add(key)
+                path, _ = find_path(p.seat, q.seat, cost, min_step=2)
+                if path:
+                    for h in path:
+                        self.tiles[h].road = True
+
+    # ---- queries ------------------------------------------------------
+    def _clearable(self, h):
+        t = self.tiles.get(h)
+        return t is not None and TERRAIN[t.terrain]["clear"] is not None
+
+    def move_cost(self, a, b):
+        """Step cost for units (half-MP units), None = impassable."""
+        tb = self.tiles.get(b)
+        if tb is None:
+            return None
+        if tb.road and self.tiles[a].road:
+            return ROAD_MOVE
+        return TERRAIN[tb.terrain]["move"]
+
+    def _territory_cost(self, a, b):
+        tb = self.tiles.get(b)
+        if tb is None:
+            return None
+        m = TERRAIN[tb.terrain]["move"]
+        return TERRITORY_COST_IMPASSABLE if m is None else m
+
+    def province_at(self, h):
+        t = self.tiles.get(h)
+        return t.owner if t else None
+
+    def player_provinces(self):
+        return [p for p in self.provinces if p.is_player]
+
+    def ruler_province(self):
+        return self.province_at(self.ruler.hex)
+
+    def ruler_present(self, p):
+        return self.ruler_province() is p
+
+    def recompute_territory(self):
+        sources = {}
+        for h, t in self.tiles.items():
+            if t.province is not None:
+                sources[h] = (0, t.province)
+        # project hexes (clearing in progress) also anchor the claim
+        for p in self.provinces:
+            if p.project and p.project["kind"] == "clear":
+                sources.setdefault(p.project["hex"], (0, p))
+        result = flood_fill(sources, self._territory_cost, TERRITORY_BUDGET)
+        for t in self.tiles.values():
+            t.owner = None
+        for p in self.provinces:
+            p.territory = set()
+            p.settled = set()
+        for h, (_, p) in result.items():
+            if h in self.tiles:
+                self.tiles[h].owner = p
+                p.territory.add(h)
+        for h, t in self.tiles.items():
+            if t.province is not None:
+                t.owner = t.province
+                t.province.territory.add(h)
+                t.province.settled.add(h)
+
+    def knights(self, p):
+        """Castles raise knights: sum of fort tiers in the province."""
+        return sum(self.tiles[h].imp[1] + 1 for h in p.settled
+                   if self.tiles[h].imp and self.tiles[h].imp[0] == "fort")
+
+    def has_line(self, p, line):
+        return any(self.tiles[h].imp and self.tiles[h].imp[0] == line
+                   for h in p.settled)
+
+    def count_line(self, p, line):
+        return sum(1 for h in p.settled
+                   if self.tiles[h].imp and self.tiles[h].imp[0] == line)
+
+    def labour(self, p):
+        """Work done per season: bigger provinces build faster (0.6 .. 2.0)."""
+        return max(0.6, min(2.0, 0.6 + 0.1 * len(p.settled)))
+
+    def best_tier(self, p, line):
+        tiers = [self.tiles[h].imp[1] for h in p.settled
+                 if self.tiles[h].imp and self.tiles[h].imp[0] == line]
+        return max(tiers) if tiers else -1
+
+    def loyalty_floor(self, p):
+        return 1 if self.best_tier(p, "church") >= 1 else 0
+
+    def yields(self, p):
+        """Base per-season yield before the season multiplier: (renders, silver)."""
+        renders, silver = 0.0, 0.0
+        for h in p.settled:
+            t = self.tiles[h]
+            renders += POP_RENDERS[t.pop] + (1 if t.river and t.pop else 0)
+            silver += POP_SILVER[t.pop]
+            if t.imp:
+                line, tier = t.imp
+                if line == "monastery":
+                    renders += tier + 1
+                elif line == "market":
+                    silver += tier + 1 + (1 if t.road else 0)
+        if p.is_player:
+            renders *= LOYALTY_MULT[p.loyalty]
+        return renders, silver
+
+    def au_income(self):
+        inc = AU_BASE
+        for p in self.player_provinces():
+            tier = self.best_tier(p, "church")
+            inc += {1: 1, 2: 2, 3: 2}.get(tier, 0)   # templom, püspökség
+            if self.best_tier(p, "pfalz") >= 0:
+                inc += 1
+        return inc
+
+    # ---- orders -------------------------------------------------------
+    def can_order(self, p):
+        """(ok, reason, au_cost) — may the player give this province an order?"""
+        if not p.is_player:
+            return False, "Idegen tartomány", 0
+        if p.acted:
+            return False, "Ebben a körben már kapott parancsot", 0
+        if p.status == "vassal" and not self.ruler_present(p):
+            if self.au < VASSAL_ORDER_AU:
+                return False, f"Vazallus: {VASSAL_ORDER_AU} tekintély kell", VASSAL_ORDER_AU
+            return True, f"Vazallus: {VASSAL_ORDER_AU} tekintélybe kerül", VASSAL_ORDER_AU
+        return True, "", 0
+
+    def _pay_order(self, p):
+        ok, _, au = self.can_order(p)
+        if not ok:
+            return False
+        self.au -= au
+        p.acted = True
+        return True
+
+    def clear_targets(self, p):
+        if p.project:
+            return set()
+        out = set()
+        for h in p.territory:
+            t = self.tiles[h]
+            if t.pop != WILD or not self._clearable(h):
+                continue
+            if any(self.provinces_project_hex(h)):
+                continue
+            if any(n in p.settled for n in neighbors(h)):
+                out.add(h)
+        return out
+
+    def provinces_project_hex(self, h):
+        return [q for q in self.provinces if q.project and q.project["hex"] == h]
+
+    def clear_cost(self, p, h):
+        terr = TERRAIN[self.tiles[h].terrain]
+        turns = terr["turns"]
+        if self.has_line(p, "monastery"):
+            turns = max(1, turns - 1)
+        return terr["clear"], turns
+
+    def build_options(self, p, h):
+        """List of dicts describing what can be built on hex h."""
+        t = self.tiles.get(h)
+        if t is None or h not in p.settled:
+            return []
+        opts = []
+        if t.imp:
+            line, tier = t.imp
+            b = BUILDINGS[line]
+            if tier + 1 < len(b["tiers"]):
+                opts.append(self._option(p, line, tier + 1, h))
+        else:
+            for line, b in BUILDINGS.items():
+                if t.pop < b["min_pop"]:
+                    continue
+                if b["unique"] and self.has_line(p, line):
+                    continue
+                if line in LINE_LIMIT and self.count_line(p, line) >= LINE_LIMIT[line](len(p.settled)):
+                    continue
+                if b["royal_only"] and p.status != "royal":
+                    continue
+                opts.append(self._option(p, line, 0, h))
+            if t.pop == VILLAGE and self._town_ok(p, h):
+                opts.append(dict(kind="town", line=None, tier=None,
+                                 label="Városnegyed", cost=TOWN_COST,
+                                 turns=TOWN_TURNS,
+                                 ok=p.store >= TOWN_COST,
+                                 reason="" if p.store >= TOWN_COST else "Kevés a szolgáltatás"))
+        return opts
+
+    def _town_ok(self, p, h):
+        for n in neighbors(h):
+            if n == p.seat:
+                return True
+            tn = self.tiles.get(n)
+            if tn and tn.province is p and (tn.pop == TOWN or (tn.imp and tn.imp[1] >= 1)):
+                return True
+        return False
+
+    def _option(self, p, line, tier, h):
+        b = BUILDINGS[line]
+        cost, turns = b["cost"][tier], b["turns"][tier]
+        ok, reason = True, ""
+        if p.religion < b["min_religion"]:
+            ok, reason = False, "Keresztény vagy vegyes vallás kell"
+        elif p.store < cost:
+            ok, reason = False, "Kevés a szolgáltatás"
+        return dict(kind="build", line=line, tier=tier, label=b["tiers"][tier],
+                    cost=cost, turns=turns, ok=ok, reason=reason)
+
+    def build_targets(self, p):
+        if p.project:
+            return set()
+        return {h for h in p.settled if self.build_options(p, h)}
+
+    def start_clear(self, p, h, by_player=True):
+        if h not in self.clear_targets(p):
+            return False
+        cost, turns = self.clear_cost(p, h)
+        if p.store < cost:
+            return False
+        if by_player and not self._pay_order(p):
+            return False
+        p.store -= cost
+        p.project = dict(kind="clear", hex=h, label="Irtás", left=float(turns),
+                         total=turns)
+        if by_player:
+            self.recompute_territory()   # NPC claims are refreshed at turn end
+        return True
+
+    def start_build(self, p, h, opt, by_player=True):
+        if p.project or not opt["ok"]:
+            return False
+        if by_player and not self._pay_order(p):
+            return False
+        p.store -= opt["cost"]
+        p.project = dict(kind=opt["kind"], hex=h, line=opt["line"],
+                         tier=opt["tier"], label=opt["label"],
+                         left=float(opt["turns"]), total=opt["turns"])
+        return True
+
+    def can_feast(self, p):
+        if not self.ruler_present(p):
+            return False, "Csak a király jelenlétében"
+        if p.store < FEAST_COST:
+            return False, "Kevés a szolgáltatás"
+        ok, reason, _ = self.can_order(p)
+        if not ok:
+            return False, reason
+        return True, ""
+
+    def feast(self, p):
+        ok, _ = self.can_feast(p)
+        if not ok or not self._pay_order(p):
+            return False
+        p.store -= FEAST_COST
+        self.prestige += FEAST_PRESTIGE
+        if p.loyalty < 3:
+            p.loyalty += 1
+        self.add_log(f"Lakoma {p.name} csarnokában. Presztízs +{FEAST_PRESTIGE}, "
+                     f"{p.lord.name} hűsége: {LOYALTY[p.loyalty]}.")
+        return True
+
+    # ---- ruler movement ----------------------------------------------
+    def ruler_reachable(self):
+        res = flood_fill({self.ruler.hex: (0, None)}, self.move_cost, self.ruler.mp)
+        return {h: c for h, (c, _) in res.items() if h != self.ruler.hex}
+
+    def ruler_path(self, goal):
+        return find_path(self.ruler.hex, goal, self.move_cost, min_step=ROAD_MOVE)
+
+    def move_ruler(self, goal):
+        path, cost = self.ruler_path(goal)
+        if path is None or cost > self.ruler.mp:
+            return None
+        self.ruler.mp -= cost
+        self.ruler.hex = goal
+        return path
+
+    # ---- NPC lords ----------------------------------------------------
+    def _npc_act(self, p):
+        if p.project:
+            return
+        trait = p.lord.trait
+        if trait == "Rest" and self.rng.random() < 0.5:
+            return
+        weights = {"clear": 2, "fort": 1, "church": 1, "monastery": 1,
+                   "market": 1, "town": 1, "pfalz": 0}
+        if trait == "Jámbor":
+            weights.update(church=5, monastery=4)
+        elif trait in ("Harcias", "Becsvágyó"):
+            weights.update(fort=4, clear=3)
+        elif trait == "Szorgos":
+            weights.update(clear=4, market=3, town=2)
+        elif trait == "Cselszövő":
+            weights.update(market=3)
+        if p.religion == 0 and p.faction != "roman":
+            weights["church"] = weights["church"] * 0.3  # pagan lords hesitate
+
+        choices = []
+        for h in self.clear_targets(p):
+            cost, _ = self.clear_cost(p, h)
+            if p.store >= cost:
+                choices.append((weights["clear"] / 3, ("clear", h, None)))
+        for h in p.settled:
+            for opt in self.build_options(p, h):
+                if opt["ok"]:
+                    key = "town" if opt["kind"] == "town" else opt["line"]
+                    w = weights.get(key, 1)
+                    if w > 0:
+                        choices.append((w, ("build", h, opt)))
+        if not choices:
+            return
+        total = sum(w for w, _ in choices)
+        pick = self.rng.random() * total
+        for w, (kind, h, opt) in choices:
+            pick -= w
+            if pick <= 0:
+                break
+        if kind == "clear":
+            self.start_clear(p, h, by_player=False)
+        else:
+            self.start_build(p, h, opt, by_player=False)
+            if p.status == "vassal":
+                self.add_log(f"{p.lord.name} ({p.name}) saját döntésből: {opt['label']}.")
+
+    # ---- turn resolution -----------------------------------------------
+    def end_turn(self):
+        season = self.season
+
+        # 1. lords who were not given an order act on their own
+        for p in self.provinces:
+            if p.status == "independent" or (p.status == "vassal" and not p.acted):
+                self._npc_act(p)
+
+        # 2. projects advance
+        for p in self.provinces:
+            if not p.project:
+                continue
+            p.project["left"] -= SEASON_WORK[season] * self.labour(p)
+            if p.project["left"] <= 0:
+                self._complete(p)
+
+        # 3. production, spoilage, global income
+        for p in self.provinces:
+            renders, silver = self.yields(p)
+            p.store += renders * SEASON_YIELD[season]
+            p.store *= (1 - SPOILAGE)
+            if p.is_player:
+                self.silver += silver
+        self.au = min(AU_CAP, self.au + self.au_income())
+
+        # 4. autumn growth: a field next to a village or the seat grows
+        if season == 2:
+            for p in self.provinces:
+                if p.store < GROWTH_STORE:
+                    continue
+                fields = sum(1 for h in p.settled if self.tiles[h].pop == FIELD)
+                villages = sum(1 for h in p.settled
+                               if self.tiles[h].pop >= VILLAGE and h != p.seat)
+                if fields < villages + 2:      # a village needs fields around it
+                    continue
+                cands = [h for h in p.settled if self.tiles[h].pop == FIELD
+                         and any(n == p.seat or (n in p.settled and self.tiles[n].pop >= VILLAGE)
+                                 for n in neighbors(h))]
+                if cands:
+                    h = self.rng.choice(sorted(cands))
+                    self.tiles[h].pop = VILLAGE
+                    p.store -= GROWTH_COST
+                    if p.is_player:
+                        self.add_log(f"{p.name}: új falu nőtt ki a szántók közül.")
+
+        # 5. loyalty: the ruler's visit lifts it, long absence wears it down
+        rp = self.ruler_province()
+        for p in self.player_provinces():
+            if p is rp:
+                if p.visit_streak == 0 and p.loyalty < 2:
+                    p.loyalty += 1
+                    self.add_log(f"A király {p.name} tartományban időzik; "
+                                 f"{p.lord.name} hűsége: {LOYALTY[p.loyalty]}.")
+                p.visit_streak += 1
+                p.last_visit = self.turn
+            else:
+                p.visit_streak = 0
+                limit = ABSENCE_LIMIT_PFALZ if self.best_tier(p, "pfalz") >= 0 else ABSENCE_LIMIT
+                if self.turn - p.last_visit >= limit:
+                    floor = self.loyalty_floor(p)
+                    if p.loyalty > floor:
+                        p.loyalty -= 1
+                        self.add_log(f"{p.name} rég nem látta a királyt: "
+                                     f"{p.lord.name} hűsége: {LOYALTY[p.loyalty]}.")
+                    p.last_visit = self.turn   # restart the clock
+
+        # 6. advance time
+        self.turn += 1
+        if self.season == 0:
+            if self.prestige > 0:
+                self.prestige -= 1
+            self.add_log(f"Új esztendő. A tettek nélküli presztízs kopik (-1).")
+        for p in self.provinces:
+            p.acted = False
+        self.ruler.mp = RULER_MP
+        self.recompute_territory()
+
+    def _complete(self, p):
+        pr = p.project
+        h = pr["hex"]
+        t = self.tiles[h]
+        p.project = None
+        if pr["kind"] == "clear":
+            self._settle(h, p, FIELD)
+            msg = f"{p.name}: az irtás elkészült, új szántó ({TERRAIN[t.terrain]['name'].lower()})."
+        elif pr["kind"] == "town":
+            t.pop = TOWN
+            msg = f"{p.name}: új városnegyed."
+        else:
+            line, tier = pr["line"], pr["tier"]
+            t.imp = [line, tier]
+            msg = f"{p.name}: elkészült — {pr['label']}."
+            n_tiers = len(BUILDINGS[line]["tiers"])
+            if p.is_player and tier >= 2:
+                gain = 6 if tier == n_tiers - 1 else 3
+                self.prestige += gain
+                msg += f" Presztízs +{gain}."
+            if line == "church":
+                new_rel = min(2, max(p.religion, tier + 1))
+                if new_rel != p.religion:
+                    p.religion = new_rel
+                    msg += f" A tartomány vallása: {RELIGION[new_rel]}."
+        if p.is_player:
+            self.add_log(msg)
+        # territory is recomputed once at the end of end_turn()
