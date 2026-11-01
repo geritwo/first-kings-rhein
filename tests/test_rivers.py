@@ -6,7 +6,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from hexcore import hex_corner_keys  # noqa: E402
+from hexcore import hex_corner_keys, neighbors  # noqa: E402
 from world import RIVER_COUNT, World  # noqa: E402
 
 SEEDS = range(50)
@@ -31,7 +31,7 @@ class EdgeRiverTest(unittest.TestCase):
                 for c1, c2 in zip(river, river[1:]):
                     edge = c1 & c2
                     self.assertEqual(len(edge), 2, w.seed)
-                    self.assertTrue(any(h in w.tiles for h in edge), w.seed)
+                    self.assertTrue(all(h in w.tiles for h in edge), w.seed)  # not on the border
 
     def test_source_and_mouth(self):
         for w in self.worlds:
@@ -47,6 +47,24 @@ class EdgeRiverTest(unittest.TestCase):
                     self.assertFalse(water(c), w.seed)
                     self.assertNotIn(c, earlier, w.seed)
                 earlier.update(river)
+                for b in w.river_branches:      # its island channels count too
+                    if b[0] in river:
+                        earlier.update(b)
+
+    def test_islands(self):
+        """A branch leaves and rejoins its river round one hex: an island."""
+        self.assertTrue(any(w.river_branches for w in self.worlds))
+        for w in self.worlds:
+            for branch in w.river_branches:
+                parent = next(r for r in w.rivers if branch[0] in r and branch[-1] in r)
+                self.assertLess(parent.index(branch[0]), parent.index(branch[-1]), w.seed)
+                island = set.intersection(*(set(c) for c in branch))
+                self.assertEqual(len(island), 1, w.seed)
+                h = island.pop()
+                for n in neighbors(h):
+                    self.assertTrue(w.is_river_edge(h, n), (w.seed, h))
+                for c1, c2 in zip(branch, branch[1:]):
+                    self.assertEqual(len(c1 & c2), 2, w.seed)
 
     def test_tile_flag_matches_edges(self):
         for w in self.worlds:

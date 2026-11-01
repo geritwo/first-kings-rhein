@@ -443,7 +443,7 @@ class Game:
 
         # rivers and roads
         ox, oy = self.origin
-        for river in w.rivers:                  # along hex edges, corner to corner
+        for river in w.rivers + w.river_branches:   # along hex edges, corner to corner
             pts = [(x + ox, y + oy) for x, y in
                    (corner_pixel(c, HEX_SIZE) for c in river)]
             pygame.draw.lines(surf, RIVER_COL, False, pts, 4)

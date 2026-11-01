@@ -23,7 +23,7 @@ import heapq
 import math
 import random
 
-from hexcore import (DIRECTIONS, axial_to_pixel, corner_neighbors, find_path,
+from hexcore import (DIRECTIONS, axial_to_pixel, corner_neighbors, corner_pixel, find_path,
                      flood_fill, hex_corner_keys, hex_distance, neighbors,
                      offset_to_axial)
 
@@ -53,12 +53,18 @@ TERRITORY_COST_IMPASSABLE = 5   # mountains/lakes can be claimed, not entered
 TERRITORY_BUDGET = 4            # how far a province's claim reaches
 
 # Rivers (F02): run along hex edges from hills/mountains to a lake or another river
-RIVER_COUNT = (3, 5)            # random target count, inclusive
-RIVER_MIN_LEN = 4               # edges; shorter rivers are rejected
-RIVER_MAX_LEN = 30              # edges; no trekking across the map to a far lake
-RIVER_SOURCE_SPACING = 6        # min hex distance between river sources
+RIVER_COUNT = (5, 9)            # random target count, inclusive
+RIVER_MIN_LEN = 6               # edges; shorter rivers are rejected
+RIVER_MAX_LEN = 60              # edges; no trekking across the whole map
+RIVER_SOURCE_SPACING = 4        # min hex distance between river sources
 RIVER_UPHILL_PENALTY = 20       # step cost per unit of climbed elevation
-RIVER_NOISE = 0.15              # max random extra cost per edge (meandering)
+RIVER_FLAT = ("plains", "forest", "marsh")   # terrain where rivers meander
+RIVER_STEP_COST = 0.3           # base cost per edge; low = detours are cheap
+RIVER_MEANDER_FLAT = 12.0       # extra step cost from a smooth noise field, flatlands
+RIVER_MEANDER_HILL = 1.5        # same, hills/mountains (straighter, steeper courses)
+RIVER_MEANDER_FLOOR = 0.4       # noise below this is free: the "valleys" rivers follow
+RIVER_MEANDER_FREQ = 0.35       # noise frequency per hex; lower = wider bends
+RIVER_ISLAND_CHANCE = 0.5       # per river: a side channel round one flat hex
 
 # Settlement level of a hex
 WILD, FIELD, VILLAGE, TOWN = 0, 1, 2, 3
@@ -238,6 +244,7 @@ class World:
         self.au = 6
         self.log = []
         self.rivers = []          # list of corner lists, source -> mouth
+        self.river_branches = []  # side channels round an island hex
         self.river_edges = set()  # frozenset({hex_a, hex_b})
         self._generate_terrain()
         self._generate_rivers()
@@ -294,7 +301,12 @@ class World:
 
     def _generate_rivers(self):
         """Edge rivers: Dijkstra over the hex-corner graph, from a high corner
-        downhill to a corner touching a lake or an earlier river."""
+        downhill to a corner touching a lake or an earlier river.  A smooth
+        noise field (stronger on flat land) bends the course; some rivers get
+        a side channel round one hex, which becomes an island."""
+        # own RNG: river tuning must not reshuffle provinces etc. on a given seed
+        rng = random.Random(self.seed * 7919 + 2)
+
         def on_map(c):
             return [h for h in c if h in self.tiles]
 
@@ -309,16 +321,21 @@ class World:
                 elev_cache[c] = sum(self.elev[h] for h in hs) / len(hs)
             return elev_cache[c]
 
-        noise = {}
+        def meander(c, field):
+            x, y = corner_pixel(c, 1.0)
+            f = RIVER_MEANDER_FREQ / math.sqrt(3)       # per hex, not per unit
+            return fbm(x * f, y * f, field, octaves=2)
 
-        def step_cost(c1, edge, c2):
-            if edge not in noise:
-                noise[edge] = self.rng.random() * RIVER_NOISE
-            return 1 + RIVER_UPHILL_PENALTY * max(0.0, elev(c2) - elev(c1)) + noise[edge]
+        def step_cost(c1, edge, c2, field):
+            flat = all(self.tiles[h].terrain in RIVER_FLAT for h in edge if h in self.tiles)
+            amp = RIVER_MEANDER_FLAT if flat else RIVER_MEANDER_HILL
+            return (RIVER_STEP_COST
+                    + RIVER_UPHILL_PENALTY * max(0.0, elev(c2) - elev(c1))
+                    + amp * max(0.0, meander(c2, field) - RIVER_MEANDER_FLOOR))
 
         river_corners = set()
 
-        def path_from(source):
+        def path_from(source, field):
             dist, prev = {source: 0.0}, {source: None}
             heap, tie = [(0.0, 0, source)], 1
             while heap:
@@ -332,14 +349,53 @@ class World:
                         c = prev[c]
                     return path[::-1]
                 for edge, n in corner_neighbors(c):
-                    if not any(h in self.tiles for h in edge):
-                        continue        # both sides off-map
-                    nd = d + step_cost(c, edge, n)
+                    if not all(h in self.tiles for h in edge):
+                        continue        # no running along the map border
+                    nd = d + step_cost(c, edge, n, field)
                     if nd < dist.get(n, math.inf):
                         dist[n], prev[n] = nd, c
                         heapq.heappush(heap, (nd, tie, n))
                         tie += 1
             return None
+
+        def add_course(path):
+            river_corners.update(path)
+            for c1, c2 in zip(path, path[1:]):
+                edge = c1 & c2
+                self.river_edges.add(edge)
+                for h in edge:
+                    if h in self.tiles:
+                        self.tiles[h].river = True
+
+        def island_branch(path):
+            """A side channel round a flat hex the river already runs along
+            for 2-3 edges: the other side of that hex, from where the river
+            meets it to where it leaves it."""
+            options = []
+            for i in range(len(path) - 2):
+                shared = path[i] & path[i + 1] & path[i + 2]
+                if len(shared) != 1:
+                    continue
+                h = next(iter(shared))
+                if (h not in self.tiles or self.tiles[h].terrain not in RIVER_FLAT
+                        or any(n not in self.tiles for n in neighbors(h))):
+                    continue
+                j = i + 2
+                if j + 1 < len(path) and h in path[j + 1]:
+                    j += 1                      # runs along 3 edges of h
+                if i > 0 and h in path[i - 1]:
+                    continue                    # counted from its first corner only
+                ring = hex_corner_keys(h)
+                k0, k1 = ring.index(path[i]), ring.index(path[j])
+                inner = set(path[i + 1:j])
+                arcs = ([ring[(k0 + s) % 6] for s in range(7) if s <= (k1 - k0) % 6],
+                        [ring[(k0 - s) % 6] for s in range(7) if s <= (k0 - k1) % 6])
+                branch = next(a for a in arcs if not inner & set(a))
+                mids = branch[1:-1]
+                if any(c in river_corners or touches_water(c) for c in mids):
+                    continue
+                options.append(branch)
+            return rng.choice(options) if options else None
 
         # sources: mountain corners first, then hills; highest first
         candidates = {}
@@ -351,7 +407,7 @@ class World:
                         candidates[c] = min(candidates.get(c, 9), rank)
         order = sorted(candidates, key=lambda c: (candidates[c], -elev(c),
                                                   sorted(c)))
-        target = self.rng.randint(*RIVER_COUNT)
+        target = rng.randint(*RIVER_COUNT)
         sources = []
         for src in order:
             if len(self.rivers) >= target:
@@ -361,18 +417,18 @@ class World:
             if any(hex_distance(a, b) < RIVER_SOURCE_SPACING
                    for s in sources for a in src for b in s):
                 continue
-            path = path_from(src)
+            field = self.seed + 1000 + 17 * len(sources)   # own bends per river
+            path = path_from(src, field)
             if path is None or not (RIVER_MIN_LEN <= len(path) - 1 <= RIVER_MAX_LEN):
                 continue
             sources.append(src)
             self.rivers.append(path)
-            river_corners.update(path)
-            for c1, c2 in zip(path, path[1:]):
-                edge = c1 & c2
-                self.river_edges.add(edge)
-                for h in edge:
-                    if h in self.tiles:
-                        self.tiles[h].river = True
+            add_course(path)
+            if rng.random() < RIVER_ISLAND_CHANCE:
+                branch = island_branch(path)
+                if branch:
+                    self.river_branches.append(branch)
+                    add_course(branch)
 
     def is_river_edge(self, a, b):
         """True if a river runs between neighbouring hexes a and b."""

@@ -1,17 +1,20 @@
 # F02 — Edge rivers
 
-Status: **done** (2026-11-01) · Design: `01-map-and-terrain.md` § Rivers · Depends on: F01
+Status: **done** (2026-11-01; revised same day: more, longer, curvier rivers + islands) · Design: `01-map-and-terrain.md` § Rivers · Depends on: F01
 
 ## Goal
 Rivers rise in the hills/mountains and run **along hex edges** downhill until they reach a lake or
-join another river, and and are drawn as continuous lines between hexes.
+join another river, and are drawn as continuous lines between hexes.
 
 ## Scope (in)
 - Replace the current through-hex-centre river walk (`World._generate_river`, `Tile.river_to`)
   with a **corner graph + Dijkstra**, precomputed once at map generation.
-- 3–5 rivers per map (random count), starting at corners of hill/mountain hexes and ending at a
+- 5–9 rivers per map (random count), starting at corners of hill/mountain hexes and ending at a
   corner that touches **water** (lake) or an **existing river** (confluence). The map edge is
-  **not** a mouth.
+  **not** a mouth, and rivers never run along the map border.
+- Rivers **meander**, more strongly on flat land (plains, forest, marsh) than in hills.
+- **Islands:** a river may split round one flat hex and rejoin downstream. That hex gets river
+  edges on all 6 sides.
 - Rendering: each river is drawn as a polyline through hex corners (on the edges, not through centres).
 - Keep the existing gameplay hook working: `Tile.river` = "this hex borders at least one river
   edge" → the existing +1 render on settled river hexes and the "folyó" hover label stay.
@@ -28,31 +31,44 @@ join another river, and and are drawn as continuous lines between hexes.
 - **Corner** key: `frozenset` of the 3 hexes meeting at it (off-map hexes allowed).
   Two corners are adjacent iff they share exactly 2 hexes; that pair is the edge between them.
 - **Edge** key: `frozenset({a, b})` of the two hexes it separates.
-- `World.rivers: list[list[corner]]` — ordered source → mouth, for drawing.
+- `World.rivers: list[list[corner]]` — main courses, ordered source → mouth, for drawing.
+- `World.river_branches: list[list[corner]]` — island side channels, ordered downstream; both
+  ends lie on their parent river.
 - `World.river_edges: set[edge]` — for lookups.
 - `Tile`: `river_to` slot replaced by a `river` bool slot (set for hexes bordering a river edge).
 - Pixel position of a corner = mean of the 3 hex centres (exact for a hex lattice), so no
   corner-index bookkeeping is needed in `main.py`.
 - Helpers go in `hexcore.py`: `hex_corner_keys(h)`, `corner_neighbors(c)`, `corner_pixel(c, size)`.
 - Tunables (module constants at the top of `world.py`, placeholder values) —
-  `RIVER_COUNT = (3, 5)` (random, inclusive), `RIVER_MIN_LEN = 4` edges, `RIVER_MAX_LEN = 30` edges,
-  `RIVER_SOURCE_SPACING = 6` hexes, `RIVER_UPHILL_PENALTY = 20`, `RIVER_NOISE = 0.15`.
+  `RIVER_COUNT = (5, 9)` (random, inclusive), `RIVER_MIN_LEN = 6`, `RIVER_MAX_LEN = 60` edges,
+  `RIVER_SOURCE_SPACING = 4` hexes, `RIVER_UPHILL_PENALTY = 20`, `RIVER_STEP_COST = 0.3`,
+  `RIVER_FLAT = (plains, forest, marsh)`, `RIVER_MEANDER_FLAT = 12`, `RIVER_MEANDER_HILL = 1.5`,
+  `RIVER_MEANDER_FLOOR = 0.4`, `RIVER_MEANDER_FREQ = 0.35` per hex, `RIVER_ISLAND_CHANCE = 0.5`.
+- Rivers use their own RNG (`Random(seed·7919 + 2)`), so retuning rivers doesn't reshuffle
+  provinces and the rest of a seed's map.
 
 ## Rules (generation)
 1. Corner elevation = mean `elev` of its on-map hexes.
 2. **Sources:** corners of mountain hexes, then hill hexes, highest corner elevation first, skipping
    corners that touch water or are within `RIVER_SOURCE_SPACING` of an earlier source.
-3. **Sinks:** any corner touching a water hex, or already on a river. Corners on the map border
-   can be passed through but are not sinks.
+3. **Sinks:** any corner touching a water hex, or already on a river (incl. island channels).
 4. **Dijkstra** from the source over the corner graph to the cheapest sink. Step cost
-   `c1 → c2` = `1 + RIVER_UPHILL_PENALTY · max(0, elev(c2) − elev(c1)) + noise`, where noise is
-   seeded (`self.rng`) and fixed per edge so results are deterministic. Steps cannot go along an
-   edge between two off-map hexes. Effect: rivers flow downhill and meander a little.
+   `c1 → c2` = `RIVER_STEP_COST + RIVER_UPHILL_PENALTY · max(0, elev(c2) − elev(c1))
+   + amp · max(0, n(c2) − RIVER_MEANDER_FLOOR)`. Here `n` is a smooth 2-octave fBm field with its
+   own seed per river, and `amp` is `RIVER_MEANDER_FLAT` when both hexes of the edge are flat,
+   `RIVER_MEANDER_HILL` otherwise. The base step is cheap, so rivers take detours to follow the
+   field's low "valleys" and bend at a scale of about 1/`RIVER_MEANDER_FREQ` hexes. Edges with an
+   off-map hex are not allowed. Effect: rivers flow downhill, run fairly straight in hills and
+   wind on flat land.
 5. Target count = `rng.randint(*RIVER_COUNT)`. Reject a river shorter than `RIVER_MIN_LEN`,
    longer than `RIVER_MAX_LEN` (no trekking across the map to a far lake), or with no reachable
    sink, and try the next source. If the sources run out first, the map has fewer rivers. This
    can happen on maps with few or no lakes.
 6. Mark `river_edges` and set `Tile.river` on both sides of each edge.
+7. **Island:** with chance `RIVER_ISLAND_CHANCE`, look for a flat hex (with all neighbours on the map)
+   that the new river runs along for 2–3 consecutive edges. Add the other side of that hex as a
+   branch, provided its inner corners are not on a river and don't touch water. One island per
+   river at most; pick at random among the candidates.
 
 ## Opportunity / Constraint / Actor
 No new buildings, techs or actions. Rivers keep their existing small render bonus (opportunity
@@ -60,12 +76,14 @@ for river-side settlements); constraints such as crossing costs come later (see 
 
 ## Acceptance criteria (as tests in `tests/test_rivers.py`, stdlib `unittest`)
 For seeds 0–49 at the default map size:
-- At most 5 rivers. At least 1 on maps that have both lakes and hills/mountains. The share of
-  seeds reaching 3+ rivers is reported and checked by hand, not asserted.
-- Every pair of consecutive corners in a river shares exactly 2 hexes, at least one of them on the map.
+- At most 9 rivers. At least 1 on maps that have both lakes and hills/mountains. The share of
+  seeds reaching 5+ rivers is reported and checked by hand, not asserted.
+- Every pair of consecutive corners in a river shares exactly 2 hexes, both of them on the map.
+- Every island branch starts and ends on its parent river (in downstream order) and goes round
+  exactly one hex, which has river edges on all 6 sides. At least one island occurs across the seeds.
 - No river visits the same corner twice.
 - The first corner touches a hill or mountain hex. The last corner touches water
-  or a corner of an earlier river (never just the map edge). No earlier corner touches water.
+  or a corner of an earlier river or its island channel (never just the map edge). No earlier corner touches water.
 - `Tile.river` is true exactly for on-map hexes that border a river edge.
 - Same seed gives identical rivers.
 - `python simulate.py 40 7` runs. A headless `main.Game(seed=7).draw()` runs under
@@ -74,10 +92,11 @@ For seeds 0–49 at the default map size:
 ## Design gaps
 1. **Fertility bonus** stays at the prototype's +1 render for any settled hex that borders a river.
    Design hasn't decided this.
-2. **Lake-less maps** can end up with fewer than 3 rivers (rule 5). Placeholder: accept that, and
-   don't force lakes into terrain generation.
+2. **Lake-less maps** can end up with fewer than 5 rivers (rule 5). Placeholder: accept that, and
+   don't force lakes into terrain generation. Seeds 0–49 all reach 5–9.
+3. **Islands are only visual so far.** No rules for island hexes (defence, mills, crossings).
 
 ## Resolved (2026-11-01, chat)
 - Tunables: module constants in `world.py`.
-- Count: random 3–5.
+- Count: random 3–5. **Superseded** (same day): random 5–9, longer, curvier on flat land, islands.
 - Mouth: a river must reach a lake or join a river. The map edge doesn't count.

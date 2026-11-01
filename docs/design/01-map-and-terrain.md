@@ -18,7 +18,12 @@
   generation with Dijkstra (downhill-weighted) from a mountain/hill corner.
 - `DECIDED` A river must end at a **lake or a confluence** with another river. The map edge is
   **not** a mouth.
-- `DECIDED` 3–5 rivers per map, random count. Tunables are constants in `world.py` for now.
+- `DECIDED` 5–9 rivers per map, random count; long rivers are fine. Tunables are constants in
+  `world.py` for now.
+- `DECIDED` Rivers wind, especially on flat land; they run straighter in hills and mountains.
+- `DECIDED` Rivers can split round a hex and rejoin, forming **islands**. (Rules for islands:
+  `OPEN`.)
+- `DECIDED` Rivers do not run along the map border.
 - `LEANING` Settled hexes that border a river get +1 render (prototype value, not designed).
 - `PROPOSED` River crossing cost for movement and territory. (The original note also proposed
   weighting river courses toward province borders. Not possible yet: provinces are placed after

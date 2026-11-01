@@ -10,6 +10,7 @@ Move an item to `decisions.md` once answered, and update the design file.
 ## Map
 - [ ] Do rivers cost extra to cross (movement / territory claims)? Fords and bridges?
 - [ ] River fertility: keep the prototype's +1 render for river-side settled hexes?
+- [ ] River islands: any rules (defensible site, mill, easy crossing)?
 - [ ] Should rivers shape province borders? (Needs rivers to exist before borders are fixed — F04.)
 
 ## Provinces & land
