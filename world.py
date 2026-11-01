@@ -19,11 +19,13 @@ Design summary (see the design notes in the project):
     you pay AU (or the ruler is present); independent tribes are AI
 """
 
+import heapq
 import math
 import random
 
-from hexcore import (DIRECTIONS, axial_to_pixel, find_path, flood_fill,
-                     hex_distance, neighbors, offset_to_axial)
+from hexcore import (DIRECTIONS, axial_to_pixel, corner_neighbors, find_path,
+                     flood_fill, hex_corner_keys, hex_distance, neighbors,
+                     offset_to_axial)
 
 # ----------------------------------------------------------------------
 # Time
@@ -49,6 +51,14 @@ TERRAIN = {
 ROAD_MOVE = 1
 TERRITORY_COST_IMPASSABLE = 5   # mountains/lakes can be claimed, not entered
 TERRITORY_BUDGET = 4            # how far a province's claim reaches
+
+# Rivers (F02): run along hex edges from hills/mountains to a lake or another river
+RIVER_COUNT = (3, 5)            # random target count, inclusive
+RIVER_MIN_LEN = 4               # edges; shorter rivers are rejected
+RIVER_MAX_LEN = 30              # edges; no trekking across the map to a far lake
+RIVER_SOURCE_SPACING = 6        # min hex distance between river sources
+RIVER_UPHILL_PENALTY = 20       # step cost per unit of climbed elevation
+RIVER_NOISE = 0.15              # max random extra cost per edge (meandering)
 
 # Settlement level of a hex
 WILD, FIELD, VILLAGE, TOWN = 0, 1, 2, 3
@@ -161,7 +171,7 @@ def fbm(x, y, seed, octaves=4):
 # ----------------------------------------------------------------------
 class Tile:
     __slots__ = ("terrain", "pop", "province", "owner", "imp", "road",
-                 "river_to", "col", "row")
+                 "river", "col", "row")
 
     def __init__(self, terrain, col, row):
         self.terrain = terrain
@@ -170,12 +180,8 @@ class Tile:
         self.owner = None      # territory owner (claim), incl. settled
         self.imp = None        # [line_key, tier_index] or None
         self.road = False
-        self.river_to = None   # next hex downstream (for drawing / fertility)
+        self.river = False     # borders at least one river edge
         self.col, self.row = col, row
-
-    @property
-    def river(self):
-        return self.river_to is not None
 
 
 class Lord:
@@ -231,8 +237,10 @@ class World:
         self.prestige = 10
         self.au = 6
         self.log = []
+        self.rivers = []          # list of corner lists, source -> mouth
+        self.river_edges = set()  # frozenset({hex_a, hex_b})
         self._generate_terrain()
-        self._generate_river()
+        self._generate_rivers()
         self._place_provinces(n_provinces)
         self._build_roman_roads()
         self.recompute_territory()
@@ -284,33 +292,91 @@ class World:
                 self.tiles[h] = Tile(t, col, row)
                 self.elev[h] = e     # kept separately (Tile uses __slots__)
 
-    def _generate_river(self):
-        """One river: from a high hex, walk downhill to water or the map edge."""
-        land = [h for h, t in self.tiles.items() if t.terrain in ("hills", "mountain")]
-        if not land:
-            return
-        for _ in range(2):  # two rivers
-            start = self.rng.choice(land)
-            current, seen = start, {start}
-            for _step in range(80):
-                options = [n for n in neighbors(current) if n not in seen]
-                if not options:
-                    break
-                off_map = [n for n in options if n not in self.tiles]
-                if off_map:
-                    self.tiles[current].river_to = off_map[0]
-                    break
-                nxt = min(options, key=lambda n: self.elev[n]
-                          + self.rng.random() * 0.03)
-                self.tiles[current].river_to = nxt
-                if self.tiles[nxt].terrain == "water":
-                    break
-                seen.add(nxt)
-                current = nxt
-        # rivers carve valleys: mountains on the course become hills
-        for t in self.tiles.values():
-            if t.river and t.terrain == "mountain":
-                t.terrain = "hills"
+    def _generate_rivers(self):
+        """Edge rivers: Dijkstra over the hex-corner graph, from a high corner
+        downhill to a corner touching a lake or an earlier river."""
+        def on_map(c):
+            return [h for h in c if h in self.tiles]
+
+        def touches_water(c):
+            return any(self.tiles[h].terrain == "water" for h in on_map(c))
+
+        elev_cache = {}
+
+        def elev(c):
+            if c not in elev_cache:
+                hs = on_map(c)
+                elev_cache[c] = sum(self.elev[h] for h in hs) / len(hs)
+            return elev_cache[c]
+
+        noise = {}
+
+        def step_cost(c1, edge, c2):
+            if edge not in noise:
+                noise[edge] = self.rng.random() * RIVER_NOISE
+            return 1 + RIVER_UPHILL_PENALTY * max(0.0, elev(c2) - elev(c1)) + noise[edge]
+
+        river_corners = set()
+
+        def path_from(source):
+            dist, prev = {source: 0.0}, {source: None}
+            heap, tie = [(0.0, 0, source)], 1
+            while heap:
+                d, _, c = heapq.heappop(heap)
+                if d > dist[c]:
+                    continue
+                if c != source and (c in river_corners or touches_water(c)):
+                    path = []
+                    while c is not None:
+                        path.append(c)
+                        c = prev[c]
+                    return path[::-1]
+                for edge, n in corner_neighbors(c):
+                    if not any(h in self.tiles for h in edge):
+                        continue        # both sides off-map
+                    nd = d + step_cost(c, edge, n)
+                    if nd < dist.get(n, math.inf):
+                        dist[n], prev[n] = nd, c
+                        heapq.heappush(heap, (nd, tie, n))
+                        tie += 1
+            return None
+
+        # sources: mountain corners first, then hills; highest first
+        candidates = {}
+        for h, t in self.tiles.items():
+            if t.terrain in ("mountain", "hills"):
+                rank = 0 if t.terrain == "mountain" else 1
+                for c in hex_corner_keys(h):
+                    if len(on_map(c)) == 3 and not touches_water(c):
+                        candidates[c] = min(candidates.get(c, 9), rank)
+        order = sorted(candidates, key=lambda c: (candidates[c], -elev(c),
+                                                  sorted(c)))
+        target = self.rng.randint(*RIVER_COUNT)
+        sources = []
+        for src in order:
+            if len(self.rivers) >= target:
+                break
+            if src in river_corners:
+                continue
+            if any(hex_distance(a, b) < RIVER_SOURCE_SPACING
+                   for s in sources for a in src for b in s):
+                continue
+            path = path_from(src)
+            if path is None or not (RIVER_MIN_LEN <= len(path) - 1 <= RIVER_MAX_LEN):
+                continue
+            sources.append(src)
+            self.rivers.append(path)
+            river_corners.update(path)
+            for c1, c2 in zip(path, path[1:]):
+                edge = c1 & c2
+                self.river_edges.add(edge)
+                for h in edge:
+                    if h in self.tiles:
+                        self.tiles[h].river = True
+
+    def is_river_edge(self, a, b):
+        """True if a river runs between neighbouring hexes a and b."""
+        return frozenset((a, b)) in self.river_edges
 
     def _region(self, col, row):
         if col < self.width * 0.40 and row > self.height * 0.30:

@@ -10,7 +10,7 @@ Rhineland / Lotharingian (Ottonian–Salian, ~950–1075); other cultures may co
 - Run: `python main.py [seed]` — random map without a seed; seed 7 is the usual test map.
 - Headless rules run: `python simulate.py [turns] [seed]` (defaults 40, 7) — prints a per-province
   summary before/after. Player provinces stay idle; only NPC lords act. Use it to check balance.
-- Test: no test suite yet. UI can be smoke-tested headless with `SDL_VIDEODRIVER=dummy`,
+- Test: `python -m unittest discover tests` (stdlib unittest; so far only `tests/test_rivers.py`). UI can be smoke-tested headless with `SDL_VIDEODRIVER=dummy`,
   constructing `main.Game(seed=7)` and driving `handle_key` / `handle_click` / `end_turn` / `draw`.
 
 ## Code (current prototype)

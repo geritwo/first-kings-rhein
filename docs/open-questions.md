@@ -7,6 +7,11 @@ Move an item to `decisions.md` once answered, and update the design file.
 - [ ] Exact province size (> 7 hexes) and composition at start
 - [ ] MVP resources: 8-product list or full ~16?
 
+## Map
+- [ ] Do rivers cost extra to cross (movement / territory claims)? Fords and bridges?
+- [ ] River fertility: keep the prototype's +1 render for river-side settled hexes?
+- [ ] Should rivers shape province borders? (Needs rivers to exist before borders are fixed — F04.)
+
 ## Provinces & land
 - [ ] Default legal status of the wilderness ring: ownerless / royal forest / ecclesiastical
 - [ ] Wasteland between provinces: slow wild terrain (forest/marsh) or plain ungoverned land?

@@ -14,10 +14,15 @@
 
 ## Rivers
 - `DECIDED` **Rivers run along hex edges, not through hexes.**
-- Implementation note (from the prototype): treat hex corners as graph nodes and hex edges as
-  graph edges; weight edges (cheaper near hills/mountains sources, cheaper on province borders);
-  run Dijkstra from a mountain corner to the map edge/coast or a confluence. Precompute, don't
-  generate at render time.
+- `DECIDED` Hex corners are graph nodes and hex edges are graph edges. Rivers are precomputed at map
+  generation with Dijkstra (downhill-weighted) from a mountain/hill corner.
+- `DECIDED` A river must end at a **lake or a confluence** with another river. The map edge is
+  **not** a mouth.
+- `DECIDED` 3–5 rivers per map, random count. Tunables are constants in `world.py` for now.
+- `LEANING` Settled hexes that border a river get +1 render (prototype value, not designed).
+- `PROPOSED` River crossing cost for movement and territory. (The original note also proposed
+  weighting river courses toward province borders. Not possible yet: provinces are placed after
+  rivers.)
 - `PROPOSED` Rivers as natural province borders, trade/movement modifiers, watermill sites.
 
 ## Hidden content (see 06)

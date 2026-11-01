@@ -36,3 +36,6 @@ old one `(superseded)`.
 | 2026-10-24 | diplomacy | Marriage abstract for now | chat |
 | 2026-10-24 | diplomacy | Vassal armies controllable but may behave unpredictably | chat |
 | 2026-11-01 | towns | Town founding enables trade; trade gives steep income growth; crafts give special products | chat |
+| 2026-11-01 | map | Rivers end only at a lake or a confluence, never at the map edge | chat |
+| 2026-11-01 | map | 3–5 rivers per map (random); river tunables are module constants in `world.py` | chat |
+| 2026-11-01 | map | Edge rivers: corner = 3 hexes meeting, edge = 2 hexes; Dijkstra with uphill penalty; max 30 edges | impl |
