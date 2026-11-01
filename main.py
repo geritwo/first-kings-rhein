@@ -10,6 +10,7 @@ Controls
   I / E / L       province action: Irtás (clear) / Építés (build) / Lakoma (feast)
   1..9            pick a building option in the build menu
   K               centre on the king        N  next own province
+  H               the king stays put this turn
   Arrows / WASD   pan the map (or drag with the middle mouse button)
   SPACE / ENTER   end turn (season)
   ESC             cancel; quit when nothing is selected
@@ -37,6 +38,7 @@ HEX_SIZE = 20
 MAP_MARGIN = 30
 PAN_SPEED = 600          # px / s
 RULER_ANIM_SPEED = 6.0   # hexes / s
+CAM_EASE = 12.0          # camera glide: share of the remaining distance per s
 
 COL_BG = (20, 22, 27)
 COL_PANEL = (32, 30, 28)
@@ -136,14 +138,18 @@ class Game:
         self.preview_path = None
         self.buttons = []           # (rect, callback) rebuilt every frame
         self.dirty = True
+        self.ruler_done = False     # the king has moved or held this turn
+        self.focus = None           # "ruler" or a Province: the item awaiting orders
+        self.pending = []           # 'ruler' and provinces still awaiting orders
 
         self._compute_bounds()
         self.map_surface = None
         self.view_w = SCREEN_W - PANEL_W
         self.view_h = SCREEN_H - TOP_H
-        self.center_on(self.world.ruler.hex)
+        self.cam_target = None      # where the camera is gliding to
+        self.center_on(self.world.ruler.hex, instant=True)
         self.dragging = False
-        self.select_province(self.world.ruler_province())
+        self.advance()
 
     # ---- coordinates --------------------------------------------------
     def _compute_bounds(self):
@@ -180,10 +186,23 @@ class Game:
         cy = max(0, min(self.cam[1], max(0, self.map_h - self.view_h)))
         self.cam = [cx, cy]
 
-    def center_on(self, h):
+    def center_on(self, h, instant=False):
         x, y = self.to_map(h)
-        self.cam = [x - self.view_w / 2, y - self.view_h / 2]
-        self.clamp_cam()
+        cx = max(0, min(x - self.view_w / 2, max(0, self.map_w - self.view_w)))
+        cy = max(0, min(y - self.view_h / 2, max(0, self.map_h - self.view_h)))
+        if instant:
+            self.cam, self.cam_target = [cx, cy], None
+        else:
+            self.cam_target = (cx, cy)
+
+    def update_cam(self, dt):
+        if self.cam_target is None:
+            return
+        tx, ty = self.cam_target
+        k = 1 - math.exp(-CAM_EASE * dt)
+        self.cam = [self.cam[0] + (tx - self.cam[0]) * k, self.cam[1] + (ty - self.cam[1]) * k]
+        if abs(tx - self.cam[0]) < 0.5 and abs(ty - self.cam[1]) < 0.5:
+            self.cam, self.cam_target = [tx, ty], None
 
     # ---- selection / modes -------------------------------------------
     def select_province(self, p):
@@ -236,6 +255,7 @@ class Game:
         p = self.selected
         if p and self.world.feast(p):
             self.dirty = True
+            self.order_given()
         elif p:
             self.flash(self.world.can_feast(p)[1])
 
@@ -246,10 +266,73 @@ class Game:
         if not opt["ok"]:
             self.flash(opt["reason"])
             return
-        if self.world.start_build(self.selected, self.menu_hex, opt):
+        started = self.world.start_build(self.selected, self.menu_hex, opt)
+        if started:
             self.world.add_log(f"{self.selected.name}: munka indul — {opt['label']}.")
             self.dirty = True
         self.cancel_mode()
+        if started:
+            self.order_given()
+
+    # ---- turn flow: who still awaits orders ---------------------------
+    def province_pending(self, p):
+        w = self.world
+        if not p.is_player:
+            return False
+        ok, _, au = w.can_order(p)
+        if not ok or au:            # vassals away from the king act on their own
+            return False
+        if w.can_feast(p)[0]:
+            return True
+        if p.project:
+            return False
+        if any(p.store >= w.clear_cost(p, h)[0] for h in w.clear_targets(p)):
+            return True
+        return any(opt["ok"] for h in w.build_targets(p) for opt in w.build_options(p, h))
+
+    def refresh_pending(self):
+        w = self.world
+        self.pending = [] if self.ruler_done or not w.ruler_reachable() else ["ruler"]
+        self.pending += [p for p in w.player_provinces() if self.province_pending(p)]
+
+    def order_given(self):
+        # an order in the king's province while he has the focus is his action
+        if self.focus == "ruler" and self.selected is self.world.ruler_province():
+            self.ruler_done = True
+        self.advance()
+
+    def hold_ruler(self):
+        """The king stays where he is this turn."""
+        if self.focus == "ruler" or self.ruler_selected:
+            self.ruler_done = True
+            self.advance()
+
+    def advance(self, prefer=None):
+        """Focus the next unit/province awaiting orders, or prompt end of turn.
+
+        Units (the king) are only focused and blink — clicking them selects
+        them for movement; their province is selected so it can act instead.
+        """
+        self.refresh_pending()
+        if not self.pending:
+            self.focus = None
+            self.flash("Minden parancs kiadva — SPACE: évszak vége")
+            return
+        order = ["ruler"] + self.world.player_provinces()
+        if prefer in self.pending:
+            nxt = prefer
+        else:
+            cur = self.focus if self.focus in order else self.selected
+            i = order.index(cur) if cur in order else -1
+            nxt = next(order[(i + k) % len(order)] for k in range(1, len(order) + 1)
+                       if order[(i + k) % len(order)] in self.pending)
+        if nxt == "ruler":
+            self.select_province(self.world.ruler_province())
+            self.center_on(self.world.ruler.hex)
+        else:
+            self.select_province(nxt)
+            self.center_on(nxt.seat)
+        self.focus = nxt
 
     def next_own_province(self):
         own = self.world.player_provinces()
@@ -264,10 +347,11 @@ class Game:
         if self.ruler_sprite.moving:
             self.ruler_sprite.snap(self.world.ruler.hex)
         self.world.end_turn()
-        self.cancel_mode()
-        if self.ruler_selected:
-            self.reachable = self.world.ruler_reachable()
         self.dirty = True
+        self.ruler_done = False
+        self.focus = None
+        self.select_province(None)    # start the round from the top
+        self.advance()
 
     # ---- input --------------------------------------------------------
     def handle_click(self, pos):
@@ -285,6 +369,7 @@ class Game:
                 w.add_log(f"{self.selected.name}: irtás indul ({TERRAIN[w.tiles[h].terrain]['name'].lower()}).")
                 self.dirty = True
                 self.cancel_mode()
+                self.order_given()
             return
         if self.mode in ("build", "build_menu"):
             if h in self.targets:
@@ -304,6 +389,7 @@ class Game:
             if path:
                 self.ruler_sprite.set_path(path)
                 self.reachable = {}
+                self.ruler_done = True
             return
         self.select_province(w.province_at(h))
 
@@ -328,6 +414,8 @@ class Game:
             self.select_ruler()
         elif key == pygame.K_n:
             self.next_own_province()
+        elif key == pygame.K_h:
+            self.hold_ruler()
         elif pygame.K_1 <= key <= pygame.K_9:
             self.pick_option(key - pygame.K_1)
         return True
@@ -555,15 +643,31 @@ class Game:
 
         self.draw_ruler()
         self.draw_hover_info(hover)
+        self.draw_end_prompt()
         self.draw_topbar()
         self.draw_panel()
         pygame.display.flip()
+
+    def draw_end_prompt(self):
+        """Pulsing, clickable banner once nothing awaits orders."""
+        if self.pending:
+            return
+        col = mix(COL_GOLD, COL_TEXT, 0.5 + 0.5 * math.sin(pygame.time.get_ticks() / 300))
+        img = self.font_label.render("Minden parancs kiadva — SPACE / ENTER: évszak vége", True, col)
+        box = pygame.Rect(0, 0, img.get_width() + 28, 32)
+        box.midtop = (self.view_w // 2, TOP_H + 10)
+        pygame.draw.rect(self.screen, (20, 20, 20), box)
+        pygame.draw.rect(self.screen, col, box, 2)
+        self.screen.blit(img, img.get_rect(center=box.center))
+        self.buttons.append((box, self.end_turn))
 
     def draw_ruler(self):
         px, py = self.pixel_to_screen(*self.ruler_sprite.pixel)
         px, py = int(px), int(py)
         if self.ruler_selected:
             pygame.draw.circle(self.screen, COL_TARGET, (px, py), 13, 2)
+        elif self.focus == "ruler" and (pygame.time.get_ticks() // 400) % 2 == 0:
+            pygame.draw.circle(self.screen, COL_TARGET, (px, py), 15, 3)   # awaits orders
         # banner on a pole
         pygame.draw.line(self.screen, (60, 40, 24), (px - 4, py + 9), (px - 4, py - 14), 2)
         pygame.draw.polygon(self.screen, FACTIONS["player"]["color"],
@@ -608,7 +712,8 @@ class Game:
             (f"Presztízs {w.prestige}", COL_TEXT),
             (f"Tekintély {w.au}/20 (+{w.au_income()})", COL_TEXT),
             (f"{w.ruler.name}, {age} éves", COL_DIM),
-            ("SPACE: évszak vége", COL_DIM),
+            (f"Parancsra vár: {len(self.pending)} · SPACE: évszak vége", COL_DIM)
+            if self.pending else ("Minden parancs kiadva — SPACE: évszak vége", COL_GOLD),
         ]
         x = 12
         for text, col in items:
@@ -623,6 +728,10 @@ class Game:
         pygame.draw.line(self.screen, COL_PANEL_EDGE, (x0, TOP_H), (x0, SCREEN_H))
         self.px, self.py = x0 + 14, TOP_H + 12
 
+        if self.focus == "ruler" and not self.ruler_selected:
+            self.text("A király parancsra vár: kattints rá a mozgatáshoz, "
+                      "vagy [H] — helyben marad.", COL_TARGET, self.font_small)
+            self.py += 6
         if self.ruler_selected:
             self.panel_ruler()
         elif self.selected:
@@ -690,6 +799,9 @@ class Game:
                   "tartományok hűsége kopik.", COL_DIM, self.font_small)
         self.py += 6
         self.text("Kattints egy kijelölt mezőre a mozgáshoz.", COL_DIM, self.font_small)
+        if not self.ruler_done:
+            self.py += 6
+            self.button("[H] Helyben marad ebben az évszakban", self.hold_ruler)
 
     def panel_province(self, p):
         w = self.world
@@ -784,6 +896,7 @@ class Game:
                 elif event.type == pygame.MOUSEBUTTONUP and event.button == 2:
                     self.dragging = False
                 elif event.type == pygame.MOUSEMOTION and self.dragging:
+                    self.cam_target = None
                     self.cam[0] -= event.rel[0]
                     self.cam[1] -= event.rel[1]
                     self.clamp_cam()
@@ -792,14 +905,16 @@ class Game:
             dx = (keys[pygame.K_RIGHT] or keys[pygame.K_d]) - (keys[pygame.K_LEFT] or keys[pygame.K_a])
             dy = (keys[pygame.K_DOWN] or keys[pygame.K_s]) - (keys[pygame.K_UP] or keys[pygame.K_w])
             if dx or dy:
+                self.cam_target = None
                 self.cam[0] += dx * PAN_SPEED * dt
                 self.cam[1] += dy * PAN_SPEED * dt
                 self.clamp_cam()
 
+            self.update_cam(dt)
             was_moving = self.ruler_sprite.moving
             self.ruler_sprite.update(dt)
             if was_moving and not self.ruler_sprite.moving and self.ruler_selected:
-                self.reachable = self.world.ruler_reachable()   # refresh after arrival
+                self.advance(prefer=self.world.ruler_province())   # after arrival
 
             self.draw(hover)
         pygame.quit()
