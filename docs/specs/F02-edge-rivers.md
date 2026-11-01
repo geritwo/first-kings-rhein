@@ -1,7 +1,7 @@
 # F02 — Edge rivers
 
 Status: **done** (2026-11-01; revised same day: more, longer, curvier rivers + islands; then
-coast, sea and major rivers) · Design: `01-map-and-terrain.md` § Rivers · Depends on: F01
+coast, sea and major rivers; then slim mountain ridges + stronger flatland meanders) · Design: `01-map-and-terrain.md` § Rivers · Depends on: F01
 
 ## Goal
 Rivers rise in the hills/mountains and run **along hex edges** downhill until they reach the sea, a
@@ -22,6 +22,8 @@ at least two major rivers (Rhine/Loire-like) crossing its central plains to the 
   plains and end at the **sea**. They are drawn thicker. The other rivers rise in hills or
   mountains and mostly end up as tributaries.
 - Rivers **meander**, more strongly on flat land (plains, forest, marsh) than in hills.
+- **Mountains** (impassable) are single-hex ridges. They are 2 wide only where ridges meet, and
+  cover less area. Thinned-away mountain hexes become hills (foothills).
 - **Islands:** a river may split round one flat hex and rejoin downstream. That hex gets river
   edges on all 6 sides.
 - Rendering: each river is drawn as a polyline through hex corners (on the edges, not through centres).
@@ -60,8 +62,9 @@ at least two major rivers (Rhine/Loire-like) crossing its central plains to the 
   `RIVER_COUNT = (5, 9)` (random, inclusive, majors included), `RIVER_MIN_LEN = 8`,
   `RIVER_MAX_LEN = 70` edges,
   `RIVER_SOURCE_SPACING = 4` hexes, `RIVER_UPHILL_PENALTY = 20`, `RIVER_STEP_COST = 0.3`,
-  `RIVER_FLAT = (plains, forest, marsh)`, `RIVER_MEANDER_FLAT = 12`, `RIVER_MEANDER_HILL = 1.5`,
-  `RIVER_MEANDER_FLOOR = 0.4`, `RIVER_MEANDER_FREQ = 0.35` per hex, `RIVER_ISLAND_CHANCE = 0.5`.
+  `RIVER_UPHILL_FLAT = 6`, `RIVER_FLAT = (plains, forest, marsh)`, `RIVER_MEANDER_FLAT = 8`,
+  `RIVER_MEANDER_HILL = 1.5`, `RIVER_MEANDER_FREQ = 0.2` per hex, `RIVER_WIGGLE_STEP = 7` edges,
+  `RIVER_WIGGLE_AMP = 1.7` hexes, `RIVER_ISLAND_CHANCE = 0.5`; `MOUNTAIN_ELEV = 0.72`.
 - Rivers use their own RNG (`Random(seed·7919 + 2)`), so retuning rivers doesn't reshuffle
   provinces and the rest of a seed's map.
 
@@ -70,18 +73,27 @@ at least two major rivers (Rhine/Loire-like) crossing its central plains to the 
    where `d` is the distance in hexes from the coast side. Sea = hexes below `SEA_LEVEL` that are
    connected to that side's border. Other hexes below `SEA_LEVEL` are lakes. The width grows until
    at least 30% of the border is sea. The coast side has its own RNG (`Random(seed·7919 + 1)`).
+   **Mountain thinning:** hexes above `MOUNTAIN_ELEV` start as mountains. In repeated passes,
+   lowest elevation first, a mountain hex is turned into hills when its mountain neighbours form
+   exactly one contiguous arc of 2–5 hexes. Such a hex sits in a 2-wide band, and removing it
+   neither splits the ridge nor shortens a ridge end. What remains is the ridge's highest line,
+   one hex wide; junctions may stay 2 wide.
 1. Corner elevation = mean `elev` of its on-map hexes.
 2. **Sources:** corners of mountain hexes, then hill hexes, highest corner elevation first, skipping
    corners that touch water or are within `RIVER_SOURCE_SPACING` of an earlier source.
 3. **Sinks:** any corner touching a water hex, or already on a river (incl. island channels).
 4. **Dijkstra** from the source over the corner graph to the cheapest sink. Step cost
-   `c1 → c2` = `RIVER_STEP_COST + RIVER_UPHILL_PENALTY · max(0, elev(c2) − elev(c1))
-   + amp · max(0, n(c2) − RIVER_MEANDER_FLOOR)`. Here `n` is a smooth 2-octave fBm field with its
-   own seed per river, and `amp` is `RIVER_MEANDER_FLAT` when both hexes of the edge are flat,
-   `RIVER_MEANDER_HILL` otherwise. The base step is cheap, so rivers take detours to follow the
-   field's low "valleys" and bend at a scale of about 1/`RIVER_MEANDER_FREQ` hexes. Edges with an
-   off-map hex are not allowed. Effect: rivers flow downhill, run fairly straight in hills and
-   wind on flat land.
+   `c1 → c2` = `RIVER_STEP_COST + uphill · max(0, elev(c2) − elev(c1)) + amp · |2·n(c2) − 1|`.
+   Here `n` is a smooth 2-octave fBm field with its own seed per river, so its 0.5-contours form
+   cheap winding channels. On flat edges (both hexes flat), `uphill` is `RIVER_UPHILL_FLAT` and
+   `amp` is `RIVER_MEANDER_FLAT`; otherwise they are `RIVER_UPHILL_PENALTY` and
+   `RIVER_MEANDER_HILL`. Edges with an off-map hex are not allowed.
+4b. **Meander pass:** the noise alone left flat stretches nearly straight (sinuosity about 1.3). So
+   after routing, the river gets a waypoint every `RIVER_WIGGLE_STEP` edges on flat corners,
+   pushed `RIVER_WIGGLE_AMP` hexes (±40% random) to alternating sides of the local course. The
+   river is then re-routed through them with the same cost, avoiding its own course, other rivers
+   and water. Hill and mountain stretches, endpoints and a major river's central waypoint stay
+   fixed. If any leg can't be routed, the original course is kept.
 5. Target count = `rng.randint(*RIVER_COUNT)`. Reject a river shorter than `RIVER_MIN_LEN`,
    longer than `RIVER_MAX_LEN` (no trekking across the map to a far lake), or with no reachable
    sink, and try the next source. If the sources run out first, the map has fewer rivers. This
@@ -111,6 +123,9 @@ For seeds 0–49 at the default map size:
   seeds reaching 5+ rivers is reported and checked by hand, not asserted.
 - The coast side is one of W/NW/N, and at least 30% of its border hexes are sea.
 - At least 2 major rivers, each ending at a sea corner and passing a flat corner in the central box.
+- No mountain hex can be peeled any further (its mountain neighbours never form one arc of 2–5).
+- The median sinuosity of 24-edge flat river stretches is at least 1.6. It was 1.33 before the
+  meander pass and is about 1.85 now.
 - Every pair of consecutive corners in a river shares exactly 2 hexes, both of them on the map.
 - Every island branch starts and ends on its parent river (in downstream order) and goes round
   exactly one hex, which has river edges on all 6 sides. At least one island occurs across the seeds.
@@ -140,3 +155,4 @@ For seeds 0–49 at the default map size:
 - Coast: one random side from W / NW / N, with at least 30% of that border as sea.
 - Sea is its own terrain ("Tenger").
 - At least 2 major rivers cross the central plains and flow to the sea.
+- Mountains: slimmer (single width, double where ridges meet), less area. Flatland rivers: curvier.

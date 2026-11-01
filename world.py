@@ -25,7 +25,7 @@ import random
 
 from hexcore import (SQRT3, DIRECTIONS, axial_to_pixel, corner_neighbors, corner_pixel, find_path,
                      flood_fill, hex_corner_keys, hex_distance, neighbors,
-                     offset_to_axial)
+                     offset_to_axial, pixel_to_axial)
 
 # ----------------------------------------------------------------------
 # Time
@@ -59,6 +59,7 @@ COAST_WIDTH = 3.0               # ... fading out over this many hexes (grown unt
 COAST_BAY_AMP = 3.0             # hexes; noise on the coastline (bays, headlands)
 REGION_TILT = 0.14              # land rises away from the coast (rivers drain to the sea)
 SEA_LEVEL = 0.26
+MOUNTAIN_ELEV = 0.72            # high ground above this is thinned to single-hex ridges
 ROAD_MOVE = 1
 TERRITORY_COST_IMPASSABLE = 5   # mountains/lakes can be claimed, not entered
 TERRITORY_BUDGET = 4            # how far a province's claim reaches
@@ -74,13 +75,15 @@ RIVER_CENTRE = (0.3, 0.7)       # central box (share of width and height) majors
 RIVER_MIN_LEN = 8               # edges; shorter rivers are rejected
 RIVER_MAX_LEN = 70              # edges, minor rivers
 RIVER_SOURCE_SPACING = 4        # min hex distance between river sources
-RIVER_UPHILL_PENALTY = 20       # step cost per unit of climbed elevation
+RIVER_UPHILL_PENALTY = 20       # step cost per unit of climbed elevation (hills/mountains)
+RIVER_UPHILL_FLAT = 6           # same on flat land: lets the meander channels win
 RIVER_FLAT = ("plains", "forest", "marsh")   # terrain where rivers meander
 RIVER_STEP_COST = 0.3           # base cost per edge; low = detours are cheap
-RIVER_MEANDER_FLAT = 12.0       # extra step cost from a smooth noise field, flatlands
+RIVER_MEANDER_FLAT = 8.0        # extra step cost off the winding noise channels, flatlands
 RIVER_MEANDER_HILL = 1.5        # same, hills/mountains (straighter, steeper courses)
-RIVER_MEANDER_FLOOR = 0.4       # noise below this is free: the "valleys" rivers follow
-RIVER_MEANDER_FREQ = 0.35       # noise frequency per hex; lower = wider bends
+RIVER_MEANDER_FREQ = 0.2        # channel noise frequency per hex; lower = wider loops
+RIVER_WIGGLE_STEP = 7           # flat land: a meander waypoint every this many edges ...
+RIVER_WIGGLE_AMP = 1.7          # ... pushed this many hexes to alternating sides of the course
 RIVER_ISLAND_CHANCE = 0.5       # per river: a side channel round one flat hex
 
 # Settlement level of a hex
@@ -352,7 +355,7 @@ class World:
             e, m = self.elev[h], moist[h]
             if h in sea:
                 t = "sea"
-            elif e > 0.72:
+            elif e > MOUNTAIN_ELEV:
                 t = "mountain"
             elif e > 0.61:
                 t = "hills"
@@ -365,6 +368,26 @@ class World:
             else:
                 t = "plains"
             self.tiles[h] = Tile(t, col, row)
+        self._thin_mountains()
+
+    def _thin_mountains(self):
+        """Peel mountain blobs down to single-hex ridges along their highest
+        line; peeled hexes become hills (foothills).  A hex is peeled when
+        its mountain neighbours form one contiguous arc of 2-5 hexes: it sits
+        in a 2-wide band, and removing it neither splits the ridge nor
+        shortens a ridge end.  Junctions of ridges may stay 2 wide."""
+        mtn = {h for h, t in self.tiles.items() if t.terrain == "mountain"}
+        changed = True
+        while changed:
+            changed = False
+            for h in sorted(mtn, key=lambda h: (self.elev[h], h)):
+                ring = [n in mtn for n in neighbors(h)]
+                count = sum(ring)
+                arcs = sum(1 for i in range(6) if ring[i] and not ring[i - 1])
+                if arcs == 1 and 2 <= count <= 5:
+                    mtn.discard(h)
+                    self.tiles[h].terrain = "hills"
+                    changed = True
 
     def _generate_rivers(self):
         """Edge rivers: Dijkstra over the hex-corner graph, from a high corner
@@ -395,8 +418,8 @@ class World:
             if key not in meander_cache:
                 x, y = corner_pixel(c, 1.0)
                 f = RIVER_MEANDER_FREQ / SQRT3          # per hex, not per unit
-                meander_cache[key] = max(0.0, fbm(x * f, y * f, field, octaves=2)
-                                         - RIVER_MEANDER_FLOOR)
+                # winding channels: the 0.5-contour of the noise field costs nothing
+                meander_cache[key] = abs(2 * fbm(x * f, y * f, field, octaves=2) - 1)
             return meander_cache[key]
 
         def corner_nbrs(c):
@@ -409,8 +432,9 @@ class World:
 
         def step_cost(c1, flat, c2, field):
             amp = RIVER_MEANDER_FLAT if flat else RIVER_MEANDER_HILL
+            uphill = RIVER_UPHILL_FLAT if flat else RIVER_UPHILL_PENALTY
             return (RIVER_STEP_COST
-                    + RIVER_UPHILL_PENALTY * max(0.0, elev(c2) - elev(c1))
+                    + uphill * max(0.0, elev(c2) - elev(c1))
                     + amp * meander(c2, field))
 
         def touches_sea(c):
@@ -501,6 +525,57 @@ class World:
                         candidates[c] = min(candidates.get(c, 9), rank)
         order = sorted(candidates, key=lambda c: (candidates[c], -elev(c),
                                                   sorted(c)))
+        def is_flat(c):
+            return len(on_map(c)) == 3 and all(self.tiles[h].terrain in RIVER_FLAT for h in c)
+
+        def nearest_corner(x, y):
+            h = pixel_to_axial(x, y, 1.0)
+            cs = [c for n in [h, *neighbors(h)] for c in hex_corner_keys(n)]
+            return min(cs, key=lambda c: ((corner_pixel(c, 1.0)[0] - x) ** 2
+                                          + (corner_pixel(c, 1.0)[1] - y) ** 2, sorted(c)))
+
+        def meandered(path, field, keep=()):
+            """Bend flat stretches: waypoints every RIVER_WIGGLE_STEP edges,
+            pushed to alternating sides, then re-routed through. Corners in
+            `keep` (e.g. a major river's central waypoint) stay on the course.
+            Falls back to the original path if any leg can't be routed."""
+            k = RIVER_WIGGLE_STEP
+            marks = sorted({0, len(path) - 1}
+                           | set(range(k, len(path) - k // 2, k))
+                           | {path.index(c) for c in keep})
+            side = rng.choice((-1, 1))
+            waypoints = []
+            for i in marks:
+                c = path[i]
+                if 0 < i < len(path) - 1 and c not in keep and is_flat(c):
+                    (ax, ay), (bx, by) = (corner_pixel(path[max(0, i - k)], 1.0),
+                                          corner_pixel(path[min(len(path) - 1, i + k)], 1.0))
+                    dx, dy = bx - ax, by - ay
+                    norm = math.hypot(dx, dy) or 1.0
+                    off = side * RIVER_WIGGLE_AMP * SQRT3 * rng.uniform(0.6, 1.3)
+                    x, y = corner_pixel(c, 1.0)
+                    t = nearest_corner(x - dy / norm * off, y + dx / norm * off)
+                    if (is_flat(t) and not touches_water(t) and t not in river_corners
+                            and t not in waypoints):
+                        c = t
+                    side = -side
+                if c not in waypoints:
+                    waypoints.append(c)
+            out = [waypoints[0]]
+            used = {waypoints[0]}
+            for a, b in zip(waypoints, waypoints[1:]):
+                if b in used:
+                    return path
+                leg = dijkstra(a, lambda c, b=b: c == b,
+                               lambda c: (c in used or c in waypoints or c in river_corners
+                                          or touches_water(c)),
+                               field, repel=True)
+                if leg is None:
+                    return path
+                out += leg[1:]
+                used.update(leg)
+            return out
+
         def finish(path):
             self.rivers.append(path)
             add_course(path)
@@ -563,7 +638,7 @@ class World:
                 if len(path) - 1 <= RIVER_MAJOR_MAX_LEN:
                     sources.append(src)
                     waypoints.append(wp)
-                    finish(path)
+                    finish(meandered(path, field, keep=(wp,)))
                 break
         self.n_major_rivers = len(self.rivers)
 
@@ -580,7 +655,7 @@ class World:
             if path is None or not (RIVER_MIN_LEN <= len(path) - 1 <= RIVER_MAX_LEN):
                 continue
             sources.append(src)
-            finish(path)
+            finish(meandered(path, field))
 
     def is_river_edge(self, a, b):
         """True if a river runs between neighbouring hexes a and b."""

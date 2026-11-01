@@ -8,6 +8,8 @@
 ## Terrain
 - `DECIDED` Civ-like terrain set, starting with **plains, hills, mountains**. Mountains appear in
   chains or standalone.
+- `DECIDED` Impassable (alpine) mountains form **slim ridges**: one hex wide, two only where
+  ridges meet. They cover a small area, and the rest of the high ground is hills.
 - `LEANING` Forest and marsh as additional types (relevant for clearing, hunting, wilderness).
 - `DECIDED` **Coast:** every map has sea on one side, chosen at random from west, north-west and
   north. At least 30% of that map border is sea. Sea ("Tenger") is its own terrain, separate from
@@ -24,7 +26,8 @@
   **not** a mouth.
 - `DECIDED` 5–9 rivers per map, random count; long rivers are fine. Tunables are constants in
   `world.py` for now.
-- `DECIDED` Rivers wind, especially on flat land; they run straighter in hills and mountains.
+- `DECIDED` Rivers wind, especially on flat land, with real meanders (like the Loire or the
+  lower Rhine). They run straighter in hills and mountains.
 - `DECIDED` Rivers can split round a hex and rejoin, forming **islands**. (Rules for islands:
   `OPEN`.)
 - `DECIDED` Rivers do not run along the map border.

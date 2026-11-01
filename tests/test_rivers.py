@@ -7,7 +7,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from hexcore import hex_corner_keys, neighbors  # noqa: E402
-from hexcore import axial_to_offset  # noqa: E402
+from hexcore import axial_to_offset, corner_pixel  # noqa: E402
 from world import (COAST_MIN_SHARE, COAST_SIDES, RIVER_CENTRE, RIVER_COUNT,  # noqa: E402
                    RIVER_FLAT, RIVER_MAJOR_COUNT, World)
 
@@ -80,6 +80,31 @@ class EdgeRiverTest(unittest.TestCase):
                                     and lo * w.height <= row <= hi * w.height
                                     for col, row in offs))
                 self.assertTrue(any(central_flat(c) for c in river), w.seed)
+
+    def test_mountain_ridges(self):
+        """Mountains are single-hex ridges: no mountain hex sits in a 2-wide
+        band it could be peeled from (neighbours forming one arc of 2-5)."""
+        for w in self.worlds:
+            mtn = {h for h, t in w.tiles.items() if t.terrain == "mountain"}
+            for h in mtn:
+                ring = [n in mtn for n in neighbors(h)]
+                arcs = sum(1 for i in range(6) if ring[i] and not ring[i - 1])
+                self.assertFalse(arcs == 1 and 2 <= sum(ring) <= 5, (w.seed, h))
+
+    def test_flat_rivers_meander(self):
+        """On flat land, 24-edge stretches are clearly longer than the straight
+        line (a straight hex-edge zigzag is ~1.2-1.3)."""
+        ratios = []
+        for w in self.worlds:
+            for r in w.rivers:
+                for i in range(0, len(r) - 24, 6):
+                    win = r[i:i + 25]
+                    if all(w.tiles[h].terrain in RIVER_FLAT
+                           for c in win for h in c if h in w.tiles):
+                        (ax, ay), (bx, by) = corner_pixel(win[0], 1), corner_pixel(win[-1], 1)
+                        ratios.append(24 / max(0.5, ((ax - bx) ** 2 + (ay - by) ** 2) ** .5))
+        ratios.sort()
+        self.assertGreaterEqual(ratios[len(ratios) // 2], 1.6)
 
     def test_islands(self):
         """A branch leaves and rejoins its river round one hex: an island."""
