@@ -30,6 +30,7 @@ python simulate.py 40 7   # fejnélküli szimuláció 40 évszakra (balanszolás
 | `I` / `E` / `L` | Irtás / Építés / Lakoma a kijelölt tartományban |
 | `1`–`9` | építési lehetőség választása |
 | `K` | a királyra ugrik és kijelöli · `N` következő saját tartomány |
+| `H` | a király helyben marad ebben az évszakban |
 | Nyilak / WASD / középső gomb húzása | térkép görgetése |
 | `SPACE` / `ENTER` | évszak vége |
 
