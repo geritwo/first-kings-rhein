@@ -67,6 +67,37 @@ def neighbors(h):
         yield (q + dq, r + dr)
 
 
+# ----------------------------------------------------------------------
+# Corners and edges (for edge rivers)
+#   corner = frozenset of the 3 hexes meeting at it (off-map hexes allowed)
+#   edge   = frozenset of the 2 hexes it separates
+#   two corners are adjacent iff they share exactly 2 hexes (= their edge)
+# ----------------------------------------------------------------------
+def hex_corner_keys(h):
+    """The 6 corners of hex h (consecutive DIRECTIONS are adjacent hexes)."""
+    ns = list(neighbors(h))
+    return [frozenset((h, ns[i], ns[(i + 1) % 6])) for i in range(6)]
+
+
+def corner_neighbors(c):
+    """The 3 corners adjacent to corner c, as (edge, corner) pairs."""
+    hexes = tuple(c)
+    out = []
+    for i in range(3):
+        a, b = hexes[i], hexes[(i + 1) % 3]
+        # a and b have exactly two common neighbours: the third hex of c and d
+        common = set(neighbors(a)) & set(neighbors(b))
+        d = (common - c).pop()
+        out.append((frozenset((a, b)), frozenset((a, b, d))))
+    return out
+
+
+def corner_pixel(c, size):
+    """Exact corner position: centroid of the 3 hex centres."""
+    xs, ys = zip(*(axial_to_pixel(*h, size) for h in c))
+    return sum(xs) / 3, sum(ys) / 3
+
+
 def offset_to_axial(col, row):
     """'odd-r' offset (rectangular map layout) -> axial."""
     return col - (row - (row & 1)) // 2, row

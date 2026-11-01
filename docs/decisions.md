@@ -36,3 +36,13 @@ old one `(superseded)`.
 | 2026-10-24 | diplomacy | Marriage abstract for now | chat |
 | 2026-10-24 | diplomacy | Vassal armies controllable but may behave unpredictably | chat |
 | 2026-11-01 | towns | Town founding enables trade; trade gives steep income growth; crafts give special products | chat |
+| 2026-11-01 | map | Rivers end only at a lake or a confluence, never at the map edge | chat |
+| 2026-11-01 | map | (superseded) 3–5 rivers per map (random); river tunables are module constants in `world.py` | chat |
+| 2026-11-01 | map | Edge rivers: corner = 3 hexes meeting, edge = 2 hexes; Dijkstra with uphill penalty; max 30 edges | impl |
+| 2026-11-01 | map | 5–9 rivers per map (random), longer; curvier on flat land; rivers may form islands | chat |
+| 2026-11-01 | map | Meander = smooth noise field in the Dijkstra cost, stronger on flat terrain; islands = side channel round one flat hex; no river edges on the map border; rivers use their own RNG | impl |
+| 2026-11-01 | map | Coast on one random side (W / NW / N), sea on ≥30% of that border; sea is its own terrain ("Tenger") | chat |
+| 2026-11-01 | map | ≥2 major rivers rise far from the coast, cross the central plains and reach the sea | chat |
+| 2026-11-01 | map | Coast = elevation drop + bay noise towards the coast side, land tilted up away from it; majors routed source → nearest central flat corner → sea; rivers penalised within a hex of another river | impl |
+| 2026-11-01 | map | Impassable mountains are slim ridges (1 hex wide, 2 where ridges meet), smaller area; flatland rivers must meander clearly | chat |
+| 2026-11-01 | map | Mountains = high ground thinned to its top ridge line, peeled hexes become hills; meanders = alternating lateral waypoints every ~7 edges on flat land, re-routed with Dijkstra | impl |

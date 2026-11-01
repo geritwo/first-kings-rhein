@@ -8,7 +8,7 @@ Pick one item at a time; write its spec in `docs/specs/<ID>-<slug>.md`.
 | ID | Feature | Depends on | Design | Status |
 |---|---|---|---|---|
 | F01 | Hex map core: coordinates, terrain gen, rendering, camera | — | 01 | done |
-| F02 | Edge rivers (corner graph + Dijkstra, precomputed) | F01 | 01 | todo |
+| F02 | Edge rivers (corner graph + Dijkstra, precomputed) | F01 | 01 | done |
 | F03 | Turn loop + point accumulation + simple HUD | F01 | 06 | proto |
 | F04 | Provinces with fixed borders, seat hex, per-hex ownership | F01 | 02 | proto |
 | F05 | Ruler unit: movement, travel income, province depletion | F03, F04 | 03 | proto |
@@ -39,8 +39,10 @@ What the prototype (`hexcore.py`, `world.py`, `main.py`) already has, and where 
 
 - **F01 done** — axial pointy-top coordinates, terrain gen (plains, forest, hills, marsh, mountain,
   lake), cached map rendering, camera pan/drag/glide.
-- **F02 todo** — two rivers exist, but they flow *through* hex centres (greedy downhill walk,
-  `Tile.river_to`), not along edges via a corner graph + Dijkstra. Needs a rewrite.
+- **F02 done** (2026-11-01) — 5–9 meandering rivers along hex edges (corner graph + Dijkstra), with
+  islands; 2 major rivers cross the central plains to the sea, the others are mostly tributaries.
+  Also added to terrain gen (F01): a sea coast on one of W / NW / N, and slim mountain ridges; see `docs/specs/F02-edge-rivers.md`. No movement or
+  border effects yet (`World.is_river_edge` is the hook).
 - **F03 proto** — seasonal turn loop (481 spring, autumn harvest), top-bar HUD. Point types are the
   prototype's own: local renders (spoil 15%/season), silver, prestige (decays), authority (cap 20).
 - **F04 proto** — provinces with a seat hex and per-hex `owner`, but borders are **not fixed**: claims

@@ -23,7 +23,8 @@ import sys
 
 import pygame
 
-from hexcore import EDGE_CORNERS, DIRECTIONS, axial_to_pixel, hex_corners, pixel_to_axial
+from hexcore import (EDGE_CORNERS, DIRECTIONS, axial_to_pixel, corner_pixel, hex_corners,
+                     pixel_to_axial)
 from world import (BUILDINGS, FEAST_COST, FEAST_PRESTIGE, LOYALTY, POP_NAMES, RELIGION,
                    RULER_MP, SEASON_WORK, SEASON_YIELD, SEASONS, TERRAIN, TOWN, VILLAGE,
                    FIELD, FACTIONS, World)
@@ -60,10 +61,11 @@ TERRAIN_COL = {
     "marsh": (94, 116, 104),
     "mountain": (122, 118, 114),
     "water": (62, 98, 140),
+    "sea": (40, 70, 112),
 }
 WHEAT = (204, 184, 106)
 ROAD_COL = (120, 92, 62)
-RIVER_COL = (84, 136, 196)
+RIVER_COL = (104, 196, 236)   # bright cyan: distinct from the blue Alemann borders
 
 
 def mix(a, b, t):
@@ -441,13 +443,15 @@ class Game:
         surf.blit(tint, (0, 0))
 
         # rivers and roads
-        for h, t in w.tiles.items():
-            a = self.to_map(h)
-            if t.river_to is not None:
-                b = self.to_map(t.river_to)
-                if t.river_to not in w.tiles:   # flows off the map
-                    b = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
-                pygame.draw.line(surf, RIVER_COL, a, b, 4)
+        ox, oy = self.origin
+        majors = w.rivers[:w.n_major_rivers]
+        for river in w.rivers + w.river_branches:   # along hex edges, corner to corner
+            width = 6 if any(river is m for m in majors) else 4
+            pts = [(x + ox, y + oy) for x, y in
+                   (corner_pixel(c, HEX_SIZE) for c in river)]
+            pygame.draw.lines(surf, RIVER_COL, False, pts, width)
+            for p in pts:                       # round the joints
+                pygame.draw.circle(surf, RIVER_COL, p, width // 2)
         for h, t in w.tiles.items():
             if not t.road:
                 continue
