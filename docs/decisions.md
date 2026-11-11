@@ -51,3 +51,6 @@ old one `(superseded)`.
 | 2026-11-11 | provinces | Where there is no incoming warrior class (e.g. the king's own province) Settlement starts at maximum | chat |
 | 2026-11-11 | events | Province tension (gap between the two meters) triggers events by weighted probability (`weight` in 08), not fixed thresholds | chat |
 | 2026-11-11 | provinces | The organisation chain is split: tribal → submission → conversion = Integration levels; royal county → hereditary county = rootedness meter (replaces the single chain in 02, which was `PROPOSED`) | chat |
+| 2026-11-11 | provinces | F07b: meter tunables in `data/province_meters.json` (JSON, stdlib; the repo's first data file); placeholder levers: church tier and king's presence → Integration, knights → Settlement | chat |
+| 2026-11-11 | provinces | F07b: only royal and vassal provinces progress; independent ones stay at 0/0 until F18 (submission); no debug hook for now | chat |
+| 2026-11-11 | provinces | F07b: levels come from cumulative progress against cumulative thresholds; tension = abs(integration/5 − settlement/4); tension_weight = base weight × tension; no events fire until F16 | impl |

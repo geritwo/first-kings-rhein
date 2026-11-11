@@ -25,6 +25,8 @@ Move an item to `decisions.md` once answered, and update the design file.
 - [ ] Is conversion (religion) part of Integration, or a separate meter feeding it?
 - [ ] Which Integration level (and rootedness step) does hereditary status need?
 - [ ] Tension: how does the gap size map to event weights, and which events exist?
+- [ ] Meter values when a province is brought under the crown (F18): currently 0/0 and frozen
+  until then; keep that start, or start by culture?
 
 ## Nobility & diplomacy
 - [ ] Full representation of nobility beyond the production modifier

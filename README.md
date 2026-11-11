@@ -20,6 +20,7 @@ python simulate.py 40 7   # fejnélküli szimuláció 40 évszakra (balanszolás
 | `world.py` | A szabályok, pygame nélkül: térképgenerálás, tartományok, hexállapotok, építmények, évszakok, pontok, hűség, NPC-urak. |
 | `main.py` | Pygame-felület: térkép, határok, ikonok, oldalpanel, a király mozgatása. |
 | `simulate.py` | Szabályok futtatása UI nélkül, összefoglalóval. |
+| `data/province_meters.json` | A tartománymérők (Integráció, Letelepedés) küszöbei és értékei. |
 
 ## Irányítás
 
@@ -44,4 +45,5 @@ python simulate.py 40 7   # fejnélküli szimuláció 40 évszakra (balanszolás
 - **Globális pontok:** ezüst; presztízs (évente kopik, nagy építmények és lakoma növelik); tekintély (plafonja 20, az egyházak növelik, a vazallusnak adott parancsra költöd).
 - **Hűség:** 4 fokozat. Ha a király 8 évszakig nem látogat egy tartományt, egy fokkal romlik. Látogatáskor javul, lakomával akár Odaadóig is. Templom után nem eshet Lázongóig.
 - **Király:** egység a térképen. Ahol tartózkodik, ott a vazallus ingyen kap parancsot, és lakoma rendezhető.
+- **Tartománymérők:** Integráció (0–5) és Letelepedés (0–4) tartományonként. Csak a király tartományaiban fejlődnek (egyház, a király jelenléte, lovagok), és soha nem csökkennek. A Feszültség a kettő arányának különbsége; egyelőre csak kijelzés, események nem indulnak belőle. A királyi birtokok a maximumról indulnak, a többi tartomány nulláról, és amíg nincs behódolás, ott nem mozdulnak.
 - **NPC-urak:** a független törzsek és a vazallus a jellemvonásuk szerint döntenek (Jámbor: egyház; Harcias: vár és irtás; Szorgos: irtás és piac; Rest: gyakran semmit).

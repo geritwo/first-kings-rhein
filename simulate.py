@@ -21,6 +21,7 @@ def summary(w):
         loyal = f" {LOYALTY[p.loyalty]:<11}" if p.is_player else " " * 12
         proj = p.project["label"] if p.project else "-"
         print(f"{p.name:<12} {status:<9}{loyal} {RELIGION[p.religion]:<10} "
+              f"integr {p.integration}/{w.integration_max()} letel {p.settlement}/{w.settlement_max()}  "
               f"raktár {p.store:5.1f}  "
               + " ".join(f"{POP_NAMES[i][:4]}:{pops[i]}" for i in range(1, 4))
               + f"  lovag {w.knights(p)}  terület {len(p.territory):3}  projekt: {proj}")

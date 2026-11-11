@@ -10,7 +10,7 @@ Rhineland / Lotharingian (Ottonian–Salian, ~950–1075); other cultures may co
 - Run: `python main.py [seed]` — random map without a seed; seed 7 is the usual test map.
 - Headless rules run: `python simulate.py [turns] [seed]` (defaults 40, 7) — prints a per-province
   summary before/after. Player provinces stay idle; only NPC lords act. Use it to check balance.
-- Test: `python -m unittest discover tests` (stdlib unittest; so far only `tests/test_rivers.py`). UI can be smoke-tested headless with `SDL_VIDEODRIVER=dummy`,
+- Test: `python -m unittest discover tests` (stdlib unittest: `tests/test_rivers.py`, `tests/test_meters.py`). UI can be smoke-tested headless with `SDL_VIDEODRIVER=dummy`,
   constructing `main.Game(seed=7)` and driving `handle_key` / `handle_click` / `end_turn` / `draw`.
 
 ## Code (current prototype)
@@ -26,7 +26,10 @@ Rhineland / Lotharingian (Ottonian–Salian, ~950–1075); other cultures may co
   selected), camera glides via `cam_target`, end-of-turn banner when nothing is pending.
 - In-game text, log messages and README are Hungarian; code and comments are English. New key
   bindings go in the `main.py` docstring and the README controls table.
-- Tunables are currently module-level constants at the top of `world.py` / `main.py`, not data files.
+- Tunables are mostly module-level constants at the top of `world.py` / `main.py`. The exception is
+  the province meters (F07b, Integration / Settlement): their thresholds and values are in
+  `data/province_meters.json` (stdlib `json`), the repo's first data file; new data-driven
+  tunables should follow that pattern.
 
 **The prototype predates the design docs and diverges from them** — e.g. it starts in 481 with
 Salian Franks (not ~950–1075 Rhineland), provinces grow by clearing (not fixed borders), loyalty

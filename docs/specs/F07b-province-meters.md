@@ -1,6 +1,6 @@
 # F07b — Province meters: Integration & Settlement
 
-Status: **spec, awaiting approval** (2026-11-11) · Design: `02-provinces-and-land.md` § Integration &
+Status: **done** (2026-11-11; spec approved the same day) · Design: `02-provinces-and-land.md` § Integration &
 Settlement, `04-nobility-and-diplomacy.md`, `08-events.md` · Depends on: F04, F07
 
 ## Goal
@@ -119,3 +119,17 @@ For seeds 0–9:
    the gap", so which direction hurts more is open.
 6. **Conversion vs. Integration.** The prototype's `religion` stays untouched and separate, and the
    church line feeds Integration as a lever. Whether conversion belongs to Integration is `OPEN`.
+
+## Resolved (2026-11-11, chat)
+- Gap 1: JSON in `data/`, loaded with the stdlib.
+- Gap 2: accepted. The slice is the foundation; the meters move in tests only until F18.
+- Gaps 3–5: the placeholder start values, levers, numbers and tension formula were approved as they are.
+
+## Implementation notes
+- Files: `data/province_meters.json`, `world.py` (`load_meter_rules`, `World._init_meters`,
+  `_meter_gains`, `_raise_level`, `_advance_meters`, `tension`, `tension_weight`), `main.py`
+  (panel lines), `simulate.py` (summary), `tests/test_meters.py`.
+- `World(..., meter_rules=None)`: pass a dict to override the data file (used by the tests).
+- A level-up writes one log line, even when several thresholds pass in the same season.
+- The headless `main.Game(seed=7).draw()` check could not be run in the build session (pygame-ce
+  was not installed there); `main.py` was only syntax-checked. Run it once on the dev machine.
