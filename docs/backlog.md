@@ -14,7 +14,7 @@ Pick one item at a time; write its spec in `docs/specs/<ID>-<slug>.md`.
 | F05 | Ruler unit: movement, travel income, province depletion | F03, F04 | 03 | proto |
 | F06 | Local buildings as province modifiers (local materials) | F03, F04 | 06 | proto |
 | F07 | Nobles: feudal graph + loyalty 1–5 + production modifier | F04 | 04 | proto |
-| F07b | Province meters: Integration (0–5) + Settlement (0–4), tension events | F04, F07 | 02, 04, 08 | todo |
+| F07b | Province meters: Integration (0–5) + Settlement (0–4), tension events | F04, F07 | 02, 04, 08 | spec |
 | F08 | Knights: create estates from common land (tax-free, +army) | F04, F07, F07b | 02 | todo |
 | F09 | Conversion + bishopric/palace per province, clergy pool | F06 | 05 | proto |
 | F10 | Church tech tree (know + build) | F09 | 05 | todo |
@@ -64,7 +64,7 @@ What the prototype (`hexcore.py`, `world.py`, `main.py`) already has, and where 
   archetypes or diplomacy. Province status never changes after map generation.
 - **F20 proto** — town-quarter hexes and a market line (depot → market → fair; bonus on Roman roads).
   No rights, guilds or free towns.
-- **F07b todo** (added 2026-11-11) — nothing in code. The nearest hooks are `Province.faction`
+- **F07b spec** (added 2026-11-11, spec in `docs/specs/F07b-province-meters.md`) — nothing in code. The nearest hooks are `Province.faction`
   (`roman` / `frank` / `alemann`) and `Province.religion` (0–2); `Province.status` never changes.
   Tension events need the event engine (F16); until then F07b can only stub them.
 - **todo, nothing in code:** F10, F11, F12, F14, F15, F16, F18, F21, F22.
