@@ -13,6 +13,9 @@
   along the chain. New knights automatically strengthen whoever their immediate lord is loyal to.
 - `PROPOSED` Loyalty / stability / conversion all use one **converge-toward-target** model instead
   of fixed per-turn decay.
+  Note (2026-11-11): the province **Integration** and **Settlement** meters (see 02) are `DECIDED`
+  ratchets that never regress, so they are an exception to this model. Whether conversion
+  (religion) belongs to Integration or stays separate is `OPEN`.
 - `PROPOSED` Lightweight noble record: name, rank, loyalty, grudges/favours with expiry.
 - `PROPOSED` Character traits: Loyal, Ambitious, Cautious, Greedy. `OPEN` how many for MVP.
 
@@ -21,6 +24,7 @@
   neighbouring kingdoms, city-states):
   **Hostile → Independent → Contractual → Tributary → Vassal (loyalty 1–5) → Annexed**
 - `PROPOSED` Transition conditions/costs per step.
+- `PROPOSED` A province's **Integration** level (02) is a condition for the Vassal → Annexed step.
 - `PROPOSED` Claims system: 0–3 claim per territory from dynastic ties, legal rulings, religious
   pretext.
 

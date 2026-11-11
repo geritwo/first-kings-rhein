@@ -46,3 +46,8 @@ old one `(superseded)`.
 | 2026-11-01 | map | Coast = elevation drop + bay noise towards the coast side, land tilted up away from it; majors routed source → nearest central flat corner → sea; rivers penalised within a hex of another river | impl |
 | 2026-11-01 | map | Impassable mountains are slim ridges (1 hex wide, 2 where ridges meet), smaller area; flatland rivers must meander clearly | chat |
 | 2026-11-01 | map | Mountains = high ground thinned to its top ridge line, peeled hexes become hills; meanders = alternating lateral waypoints every ~7 edges on flat land, re-routed with Dijkstra | impl |
+| 2026-11-11 | provinces | Two per-province meters: Integration (native population, levels 0–5) and Settlement (incoming warrior class, levels 0–4); generic model for Roman-Gallic, tribal and own-culture provinces | chat |
+| 2026-11-11 | provinces | Integration and Settlement only rise (no decay or regression); setbacks come from events | chat |
+| 2026-11-11 | provinces | Where there is no incoming warrior class (e.g. the king's own province) Settlement starts at maximum | chat |
+| 2026-11-11 | events | Province tension (gap between the two meters) triggers events by weighted probability (`weight` in 08), not fixed thresholds | chat |
+| 2026-11-11 | provinces | The organisation chain is split: tribal → submission → conversion = Integration levels; royal county → hereditary county = rootedness meter (replaces the single chain in 02, which was `PROPOSED`) | chat |
