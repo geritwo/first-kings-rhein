@@ -20,7 +20,9 @@ Design summary (see the design notes in the project):
 """
 
 import heapq
+import json
 import math
+import os
 import random
 
 from hexcore import (SQRT3, DIRECTIONS, axial_to_pixel, corner_neighbors, corner_pixel, find_path,
@@ -120,6 +122,15 @@ GROWTH_STORE, GROWTH_COST = 12, 6  # autumn: field -> village
 RELIGION = ["Pogány", "Vegyes", "Keresztény"]
 LOYALTY = ["Lázongó", "Bizalmatlan", "Hűséges", "Odaadó"]
 LOYALTY_MULT = [0.5, 0.8, 1.0, 1.1]
+
+# F07b province meters (Integration / Settlement): tunables live in a data file
+METERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "data", "province_meters.json")
+
+
+def load_meter_rules(path=METERS_FILE):
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
 ABSENCE_LIMIT = 8            # seasons without a royal visit -> loyalty -1
 ABSENCE_LIMIT_PFALZ = 14
 VASSAL_ORDER_AU = 3
@@ -226,6 +237,10 @@ class Province:
         self.lord = lord
         self.store = 10.0             # renders, local
         self.loyalty = 2              # index into LOYALTY (player provinces)
+        self.integration = 0          # F07b: native population accepts the rule (ratchet)
+        self.settlement = 0           # F07b: incoming warrior class bound to the land (ratchet)
+        self.integration_progress = 0.0   # cumulative; thresholds are in the data file
+        self.settlement_progress = 0.0
         self.religion = FACTIONS[faction]["religion"]
         self.project = None           # dict, see World.start_*
         self.acted = False            # gave an order this turn
@@ -252,7 +267,8 @@ class Ruler:
 # World
 # ----------------------------------------------------------------------
 class World:
-    def __init__(self, width=40, height=28, seed=None, n_provinces=22):
+    def __init__(self, width=40, height=28, seed=None, n_provinces=22, meter_rules=None):
+        self.meter_rules = meter_rules if meter_rules is not None else load_meter_rules()
         self.seed = seed if seed is not None else random.randrange(1 << 30)
         self.rng = random.Random(self.seed)
         self.width, self.height = width, height
@@ -270,6 +286,7 @@ class World:
         self._generate_terrain()
         self._generate_rivers()
         self._place_provinces(n_provinces)
+        self._init_meters()
         self._build_roman_roads()
         self.recompute_territory()
         self.ruler = Ruler("Klodvig", self.capital.seat, born=466)
@@ -857,6 +874,65 @@ class World:
     def loyalty_floor(self, p):
         return 1 if self.best_tier(p, "church") >= 1 else 0
 
+    # ---- F07b: Integration / Settlement meters -------------------------
+    def integration_max(self):
+        return len(self.meter_rules["integration_thresholds"])
+
+    def settlement_max(self):
+        return len(self.meter_rules["settlement_thresholds"])
+
+    def _init_meters(self):
+        """Start levels by province type: the king's own provinces have nothing
+        to integrate or settle, everything else starts from the bottom."""
+        start = self.meter_rules["start"]
+        for p in self.provinces:
+            s = start["player_provinces" if p.is_player else "others"]
+            p.integration = min(s["integration"], self.integration_max())
+            p.settlement = min(s["settlement"], self.settlement_max())
+
+    def _meter_gains(self, p):
+        """Placeholder levers: (integration, settlement) progress for one season."""
+        r = self.meter_rules
+        gain_i = 0.0
+        tier = self.best_tier(p, "church")
+        if tier >= 0:
+            gain_i += r["integration_levers"]["church_per_tier"] * (tier + 1)
+        if self.ruler_present(p):
+            gain_i += r["integration_levers"]["ruler_present"]
+        gain_s = r["settlement_levers"]["per_knight"] * self.knights(p)
+        return gain_i, gain_s
+
+    def _raise_level(self, p, meter, thresholds, label):
+        """Ratchet: the level rises while the progress passes the next threshold."""
+        level = start = getattr(p, meter)
+        progress = getattr(p, meter + "_progress")
+        while level < len(thresholds) and progress >= thresholds[level]:
+            level += 1
+        if level != start:
+            setattr(p, meter, level)
+            self.add_log(f"{p.name}: {label} {level}/{len(thresholds)}.")
+
+    def _advance_meters(self):
+        """Only the king's provinces progress; independent ones keep their start."""
+        r = self.meter_rules
+        for p in self.player_provinces():
+            gain_i, gain_s = self._meter_gains(p)
+            p.integration_progress += gain_i
+            p.settlement_progress += gain_s
+            self._raise_level(p, "integration", r["integration_thresholds"], "Integráció")
+            self._raise_level(p, "settlement", r["settlement_thresholds"], "Letelepedés")
+
+    def tension(self, p):
+        """Derived, not stored: gap between the two meters as shares of their maxima (0..1)."""
+        i = p.integration / self.integration_max()
+        s = p.settlement / self.settlement_max()
+        return abs(i - s)
+
+    def tension_weight(self, p):
+        """Hook for the event engine (F16): the weight a tension incident would get.
+        Nothing fires yet."""
+        return self.meter_rules["tension_base_weight"] * self.tension(p)
+
     def yields(self, p):
         """Base per-season yield before the season multiplier: (renders, silver)."""
         renders, silver = 0.0, 0.0
@@ -1160,6 +1236,9 @@ class World:
                         self.add_log(f"{p.name} rég nem látta a királyt: "
                                      f"{p.lord.name} hűsége: {LOYALTY[p.loyalty]}.")
                     p.last_visit = self.turn   # restart the clock
+
+        # 5b. province meters (F07b): Integration and Settlement only rise
+        self._advance_meters()
 
         # 6. advance time
         self.turn += 1

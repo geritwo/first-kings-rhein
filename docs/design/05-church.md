@@ -5,6 +5,9 @@
   **bishopric + bishop's palace in every province**.
 - `DECIDED` Surviving post-imperial bishoprics may exist at game start.
 
+- `PROPOSED` The bishopric and bishop's palace are also the main **lever for the province's
+  Integration meter** (02), as the Roman-Gallic elite often supplied the bishops.
+
 ## Clergy
 - `DECIDED` Clergy is a **headcount pool**, not map units.
 

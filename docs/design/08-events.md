@@ -23,4 +23,7 @@ followups: []            # event ids that may be queued
 
 ## Notes
 - Favours/grudges with expiry (04) are effects this engine writes.
+- `DECIDED` Province **tension** (the gap between the Integration and Settlement meters, see 02)
+  starts incidents by **weighted probability**, using the `weight` field, not at fixed thresholds.
+  The weight can depend on the size of the gap.
 - Keep it data-driven; designers (me) add events as YAML/JSON files.

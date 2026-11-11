@@ -14,7 +14,8 @@ Pick one item at a time; write its spec in `docs/specs/<ID>-<slug>.md`.
 | F05 | Ruler unit: movement, travel income, province depletion | F03, F04 | 03 | proto |
 | F06 | Local buildings as province modifiers (local materials) | F03, F04 | 06 | proto |
 | F07 | Nobles: feudal graph + loyalty 1–5 + production modifier | F04 | 04 | proto |
-| F08 | Knights: create estates from common land (tax-free, +army) | F04, F07 | 02 | todo |
+| F07b | Province meters: Integration (0–5) + Settlement (0–4), tension events | F04, F07 | 02, 04, 08 | done |
+| F08 | Knights: create estates from common land (tax-free, +army) | F04, F07, F07b | 02 | todo |
 | F09 | Conversion + bishopric/palace per province, clergy pool | F06 | 05 | proto |
 | F10 | Church tech tree (know + build) | F09 | 05 | todo |
 | F11 | Church as autonomous actor (stats, demands) | F10, F16 | 05 | todo |
@@ -63,4 +64,11 @@ What the prototype (`hexcore.py`, `world.py`, `main.py`) already has, and where 
   archetypes or diplomacy. Province status never changes after map generation.
 - **F20 proto** — town-quarter hexes and a market line (depot → market → fair; bonus on Roman roads).
   No rights, guilds or free towns.
+- **F07b done** (2026-11-11, `docs/specs/F07b-province-meters.md`) — `Province.integration` /
+  `settlement` (+ progress), start values and thresholds in `data/province_meters.json`, season step
+  5b in `World.end_turn()`, `World.tension` / `tension_weight`, province panel and `simulate.py`
+  lines, `tests/test_meters.py`. Placeholder levers only (church tier, king present, knights).
+  Stubbed: tension events (F16 — `tension_weight` is the hook), knight unlock (F08), hereditary
+  condition (F21). In normal play the meters don't move yet: independent provinces stay 0/0 until
+  F18 lets the player bring them under the crown. `Province.status` still never changes.
 - **todo, nothing in code:** F10, F11, F12, F14, F15, F16, F18, F21, F22.

@@ -20,6 +20,13 @@ Move an item to `decisions.md` once answered, and update the design file.
 - [ ] Distant estate chain: clearing + steward — steps, costs, output
 - [ ] Do inherited knights reset to base loyalty?
 - [ ] Can a knight have two lords? (lean: no for MVP)
+- [ ] Integration (0–5) and Settlement (0–4): level names, starting values per province type
+- [ ] Integration / Settlement levers: costs, effects, which are buildings and which are actions
+- [ ] Is conversion (religion) part of Integration, or a separate meter feeding it?
+- [ ] Which Integration level (and rootedness step) does hereditary status need?
+- [ ] Tension: how does the gap size map to event weights, and which events exist?
+- [ ] Meter values when a province is brought under the crown (F18): currently 0/0 and frozen
+  until then; keep that start, or start by culture?
 
 ## Nobility & diplomacy
 - [ ] Full representation of nobility beyond the production modifier

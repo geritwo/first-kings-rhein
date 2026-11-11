@@ -821,6 +821,9 @@ class Game:
             when = "most" if w.ruler_present(p) else (f"{ago} évszaka" if ago else "nemrég")
             self.text(f"Királyi látogatás: {when}", COL_DIM, self.font_small)
         self.text(f"Vallás: {RELIGION[p.religion]}")
+        self.text(f"Integráció {p.integration}/{w.integration_max()} · "
+                  f"Letelepedés {p.settlement}/{w.settlement_max()}")
+        self.text(f"Feszültség: {w.tension(p):.2f}", COL_DIM, self.font_small)
         renders, silver = w.yields(p)
         now = renders * SEASON_YIELD[w.season]
         self.text(f"Raktár: {p.store:.0f} szolgáltatás (+{now:.0f} ebben az évszakban)")

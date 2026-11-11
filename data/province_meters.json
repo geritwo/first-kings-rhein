@@ -1,0 +1,17 @@
+{
+  "_comment": "F07b tunables. All numbers are placeholders. Thresholds are cumulative progress needed for level 1, 2, ... (the list length is the maximum level).",
+  "integration_thresholds": [3, 8, 15, 25, 40],
+  "settlement_thresholds": [3, 8, 15, 25],
+  "integration_levers": {
+    "church_per_tier": 1,
+    "ruler_present": 2
+  },
+  "settlement_levers": {
+    "per_knight": 0.5
+  },
+  "start": {
+    "player_provinces": { "integration": 5, "settlement": 4 },
+    "others": { "integration": 0, "settlement": 0 }
+  },
+  "tension_base_weight": 10
+}

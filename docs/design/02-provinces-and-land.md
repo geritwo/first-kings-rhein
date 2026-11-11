@@ -31,9 +31,41 @@
 - `PROPOSED` Clearing chain: wilderness → clearing → new village → developed village.
 - `PROPOSED` Farmland chain: clearing → single-field → two-field → three-field rotation (+ watermill).
 
+## Integration & Settlement (province meters)
+- `DECIDED` Every province has two meters, tracked **per province** (not per hex; this is the one
+  deliberate exception to hex-level granularity): **Integration** (the native population accepting
+  the new rule) and **Settlement** (the incoming warrior class bound to the land). Integration has
+  levels 0–5, Settlement 0–4.
+- `DECIDED` Generic model, not Frank/Gaul-specific. Culture-specific names and levers live in data
+  files. It applies to every province type: Roman-Gallic, tribal and own-culture.
+- `DECIDED` Meters **only rise** (ratchet): no decay, no regression. Setbacks come from events
+  (see 08), e.g. rebellion.
+- `DECIDED` Where there is no incoming warrior class (e.g. the king's own province) Settlement is
+  at its maximum from the start.
+- `LEANING` The meters are *states*; buildings and actions are the *levers* that move them (the
+  way kindred monasteries feed rootedness). Not a separate tech tree, not a pure building chain.
+- `LEANING` **Tension** is derived from the gap between the two meters, not stored.
+  `DECIDED` It triggers events with a **weighted probability** (the `weight` field in 08), not at
+  fixed thresholds.
+- `LEANING` Settlement level 3–4 unlocks creating knight estates (see Knights, F08).
+- `PROPOSED` Integration levers: bishopric and bishop's palace (05), native vs. Frankish count,
+  keeping Roman law and taxation, placitum events; for tribal provinces also hostages and
+  godparenthood (see the idea pool in 04).
+- `PROPOSED` Settlement levers: royal grants from fiscus land (the *royal grant* knight above),
+  organised clearing (see Frontier expansion), manor and fort building.
+- `PROPOSED` Starting values depend on province type (Roman-Gallic and tribal start low on
+  Integration; own culture starts higher).
+- `OPEN` Level names, lever costs and effects, starting values. Each lever gets the
+  Opportunity / Constraint / Actor template when it is specced.
+
 ## Province organisation progression
-- `PROPOSED` tribal territory → submission → conversion → **royal county** (appointed steward,
-  2/3 of revenue to the crown) → **hereditary county** (autonomous).
+- `DECIDED` The old single chain is **split in two** (2026-11-11):
+  - The first steps, **tribal territory → submission → conversion**, are levels of the
+    **Integration** meter above.
+  - The count's legal position, **royal county** (appointed steward, 2/3 of revenue to the crown)
+    → **hereditary county** (autonomous), is the **rootedness meter** below.
+- `PROPOSED` Royal county and hereditary county details stay as in the original chain: appointed
+  steward with 2/3 of revenue to the crown; autonomous once hereditary.
 
 ## Entrenchment / rootedness meter
 - `DECIDED` A count rootedness meter is important.
@@ -41,3 +73,5 @@
   Appointed → Settled → Embedded → Hereditary
   (Kinevezett → Megtelepedett → Beágyazott → Örökletes).
 - `PROPOSED` Kindred monasteries (see 05) feed rootedness.
+- `PROPOSED` Hereditary status also needs a high **Integration** level (see above) on top of
+  the rootedness steps.
